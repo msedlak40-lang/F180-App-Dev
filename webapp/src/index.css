@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+/* keep the app full height */
+html, body, #root { height: 100%; }
+
+/* Optional: approximate the same look without @apply */
+body {
+  background: rgb(249 250 251); /* ~ bg-gray-50 */
+  color: rgb(17 24 39);         /* ~ text-gray-900 */
+}

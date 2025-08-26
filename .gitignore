@@ -1,0 +1,10 @@
+﻿node_modules/
+dist/
+*.log
+
+.env
+.env.*.local
+webapp/.env.local
+
+supabase/.temp/
+supabase/.branches/
