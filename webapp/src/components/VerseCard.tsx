@@ -34,7 +34,8 @@ export default function VerseCard({
   onTagsChange: (verseId: string, next: string[]) => void;
   onRefresh: () => void;
 }) {
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(false);     // details collapse
+  const [soapOpen, setSoapOpen] = React.useState(false); // SOAP collapse
   const [showRefs, setShowRefs] = React.useState(false);
   const keywords = v.testament === 'old' ? v.hebrew_keywords : v.greek_keywords;
 
@@ -104,7 +105,7 @@ export default function VerseCard({
             </Field>
           )}
 
-          {/* Removed Classification per request */}
+          {/* Removed Classification per your request */}
 
           {!!v.tags?.length && (
             <Field label="Tags">
@@ -151,13 +152,28 @@ export default function VerseCard({
       </div>
 
       {/* Collapsible SOAP journaling */}
-      <SoapPanel
-        groupId={groupId}
-        verseId={v.id}
-        scriptureRef={v.reference}
-        scriptureText={v.verse_text}
-        onSaved={onRefresh}
-      />
+      <div className="mt-4 rounded-2xl border">
+        <button
+          type="button"
+          className="w-full flex items-center justify-between px-4 py-2 text-sm font-medium"
+          onClick={() => setSoapOpen(s => !s)}
+          aria-expanded={soapOpen}
+        >
+          <span>Journal (SOAP)</span>
+          <span className="text-xs opacity-70">{soapOpen ? 'Hide' : 'Show'}</span>
+        </button>
+        {soapOpen && (
+          <div className="border-t p-4">
+            <SoapPanel
+              groupId={groupId}
+              verseId={v.id}
+              scriptureRef={v.reference}
+              scriptureText={v.verse_text}
+              onSaved={onRefresh}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

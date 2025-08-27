@@ -87,3 +87,23 @@ export async function listMyTagsForVerses(verseIds: string[]) {
   return map;
 }
 
+export async function addGroupPrayer(groupId: string, verseId: string, prayerText: string) {
+  const { data, error } = await supabase.rpc('add_group_prayer', {
+    p_group_id: groupId,
+    p_verse_id: verseId,
+    p_prayer: prayerText,
+  });
+  if (error) throw new Error(error.message);
+  return data as string; // prayer_id
+}
+
+export async function shareIWill(groupId: string, verseId: string, applicationText: string) {
+  const { data, error } = await supabase.rpc('share_iwill', {
+    p_group_id: groupId,
+    p_verse_id: verseId,
+    p_application: applicationText,
+  });
+  if (error) throw new Error(error.message);
+  return data as string; // accountability_id
+}
+
