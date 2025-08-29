@@ -1,180 +1,205 @@
 import React from 'react';
-import { saveSoapEntry, type JournalVisibility } from '../services/verses';
-import { addGroupPrayer, shareIWill } from '../services/engagement';
+import { supabase } from '../lib/supabaseClient';
+import { shareSoapApplication } from '../services/accountability';
+
+type Visibility = 'group' | 'leaders' | 'private';
 
 export default function SoapPanel({
   groupId,
   verseId,
-  scriptureRef,
-  scriptureText,
-  onSaved,
+  verseRef,           // NEW: reference like "John 3:16"
+  scripture,
+  defaultOpen = false,
 }: {
   groupId: string;
   verseId: string;
-  scriptureRef?: string | null;
-  scriptureText?: string | null;
-  onSaved?: () => void;
+  verseRef: string;   // <-- make sure parent passes this
+  scripture: string;
+  defaultOpen?: boolean;
 }) {
-  const [observation, setObservation] = React.useState('');
-  const [application, setApplication] = React.useState('');
-  const [prayer, setPrayer] = React.useState('');
-  const [visibility, setVisibility] = React.useState<JournalVisibility>('private');
+  const [open, setOpen] = React.useState(defaultOpen);
 
-  const [sharePrayer, setSharePrayer] = React.useState(false);
-  const [shareWill, setShareWill] = React.useState(false);
+  // SOAP fields
+  const [s, setS] = React.useState<string>(scripture ?? '');
+  const [o, setO] = React.useState<string>(''); // Observation (I Believe)
+  const [a, setA] = React.useState<string>(''); // Application (I Will)
+  const [p, setP] = React.useState<string>(''); // Prayer
+
+  // options
+  const [vis, setVis] = React.useState<Visibility>('group');
+  const [shareWithLeader, setShareWithLeader] = React.useState(false);
+  const [pushToPrayers, setPushToPrayers] = React.useState(false);
 
   const [saving, setSaving] = React.useState(false);
-  const [msg, setMsg] = React.useState<string | null>(null);
-  const [err, setErr] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
-  const reset = () => {
-    setObservation('');
-    setApplication('');
-    setPrayer('');
-    setSharePrayer(false);
-    setShareWill(false);
-  };
+  React.useEffect(() => {
+    setS(scripture ?? '');
+  }, [scripture]);
 
-  const onSave = async () => {
+  async function saveJournal() {
     setSaving(true);
-    setMsg(null);
-    setErr(null);
+    setError(null);
     try {
-      // Save journal
-      await saveSoapEntry(
-        groupId,
-        verseId,
-        visibility,
-        observation.trim(),
-        application.trim(),
-        prayer.trim()
-      );
+      const { data: u } = await supabase.auth.getUser();
+      const uid = u.user?.id;
+      if (!uid) throw new Error('Not signed in');
 
-      const extras: string[] = [];
+      // Insert journal entry (now includes scripture_reference)
+      const { data, error } = await supabase
+        .from('journals')
+        .insert({
+          group_id: groupId,
+          author_id: uid,
+          verse_id: verseId,
+          scripture_reference: verseRef || null,   // <— important
+          soap_scripture: s?.trim() || null,
+          soap_observation: o?.trim() || null,
+          soap_application: a?.trim() || null,
+          soap_prayer: p?.trim() || null,
+          visibility: vis,
+        })
+        .select('id')
+        .single();
 
-      // Optional: push prayer to group list
-      if (sharePrayer && prayer.trim()) {
-        await addGroupPrayer(groupId, verseId, prayer.trim());
-        extras.push('shared prayer with group');
+      if (error) throw error;
+      const journalId = data?.id as string | undefined;
+
+      // Share with leader (accountability inbox)
+      if (shareWithLeader && a.trim()) {
+        try {
+          await shareSoapApplication(groupId, a.trim(), journalId ?? null);
+        } catch (err: any) {
+          console.warn('Share-with-leader failed:', err?.message || err);
+        }
       }
 
-      // Optional: share “I Will” privately with leaders
-      if (shareWill && application.trim()) {
-        await shareIWill(groupId, verseId, application.trim());
-        extras.push('shared “I Will” with leaders');
-      }
+      // Optional: push prayer to group_prayers
+// Optional: push prayer to group_prayers via RPC (sets created_by server-side)
+// Optional: push prayer to group_prayers via RPC (sets created_by server-side)
+if (pushToPrayers && p.trim()) {
+  try {
+    const prayerVis: 'leaders' | 'private' | 'group' =
+      vis === 'leaders' ? 'leaders' : vis === 'private' ? 'private' : 'group';
 
-      setMsg(`Saved to journal${extras.length ? ' and ' + extras.join(' and ') : ''}.`);
-      reset();
-      onSaved?.();
+    const { error: gpErr } = await supabase.rpc('gp_add', {
+      p_group_id: groupId,
+      p_content: p.trim(),
+      p_visibility: prayerVis,
+    });
+    if (gpErr) throw gpErr;
+  } catch (err: any) {
+    console.warn('Push-to-prayers failed:', err?.message || err);
+  }
+}
+
+      setOpen(false);
+      alert('Journal saved.');
     } catch (e: any) {
-      setErr(e?.message ?? 'Failed to save');
+      setError(e?.message ?? 'Failed to save journal');
     } finally {
       setSaving(false);
     }
-  };
+  }
 
   return (
-    <div className="mt-4 rounded-2xl border p-4 bg-white/70">
-      <div className="text-sm font-semibold mb-2">SOAP Note</div>
+    <div className="rounded-2xl border bg-white">
+      <button
+        className="w-full flex items-center justify-between px-4 py-2 text-left"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <div className="font-medium">SOAP Note</div>
+        <div className="text-sm opacity-70">{open ? 'Hide' : 'Show'}</div>
+      </button>
 
-      {/* Scripture (auto) */}
-      {(scriptureRef || scriptureText) && (
-        <div className="mb-3 rounded-lg bg-gray-50 border p-3">
-          <div className="text-xs opacity-70 font-medium mb-1">Scripture</div>
-          {scriptureRef && <div className="text-xs opacity-70">{scriptureRef}</div>}
-          {scriptureText && <div className="text-sm leading-relaxed">{scriptureText}</div>}
+      {open && (
+        <div className="px-4 pb-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <label className="text-sm">Visibility:</label>
+            <select
+              className="border rounded-lg px-2 py-1 text-sm"
+              value={vis}
+              onChange={(e) => setVis(e.target.value as Visibility)}
+            >
+              <option value="group">Group</option>
+              <option value="leaders">Leaders</option>
+              <option value="private">Private</option>
+            </select>
+          </div>
+
+          <div>
+            <div className="text-sm font-medium">Scripture</div>
+            <textarea
+              className="w-full border rounded-lg p-2 text-sm bg-gray-50"
+              rows={3}
+              value={s}
+              onChange={(e) => setS(e.target.value)}
+              placeholder="(auto-filled from verse)"
+            />
+            <div className="text-[11px] opacity-60 mt-1">Reference: {verseRef}</div>
+          </div>
+
+          <div>
+            <div className="text-sm font-medium">Observation <span className="opacity-60">(I Believe)</span></div>
+            <textarea
+              className="w-full border rounded-lg p-2 text-sm"
+              rows={3}
+              value={o}
+              onChange={(e) => setO(e.target.value)}
+              placeholder="What do I notice? What is true about God here?"
+            />
+          </div>
+
+          <div>
+            <div className="text-sm font-medium">Application <span className="opacity-60">(I Will)</span></div>
+            <textarea
+              className="w-full border rounded-lg p-2 text-sm"
+              rows={3}
+              value={a}
+              onChange={(e) => setA(e.target.value)}
+              placeholder="What will I do differently in response?"
+            />
+            <label className="mt-2 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={shareWithLeader}
+                onChange={(e) => setShareWithLeader(e.target.checked)}
+              />
+              <span>Share with leader (accountability)</span>
+            </label>
+          </div>
+
+          <div>
+            <div className="text-sm font-medium">Prayer</div>
+            <textarea
+              className="w-full border rounded-lg p-2 text-sm"
+              rows={3}
+              value={p}
+              onChange={(e) => setP(e.target.value)}
+              placeholder="Write a short prayer."
+            />
+            <label className="mt-2 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={pushToPrayers}
+                onChange={(e) => setPushToPrayers(e.target.checked)}
+              />
+              <span>Pray this with my group</span>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              className="rounded-lg px-3 py-1.5 border bg-gray-50 text-sm disabled:opacity-50"
+              onClick={saveJournal}
+              disabled={saving}
+            >
+              {saving ? 'Saving…' : 'Save to Journal'}
+            </button>
+            {error && <div className="text-sm text-red-600">{error}</div>}
+          </div>
         </div>
       )}
-
-      {/* Observation (I Believe) */}
-      <div className="mb-3">
-        <label className="text-sm font-medium">Observation (I Believe)</label>
-        <textarea
-          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-          rows={3}
-          placeholder="What does this reveal about God's character? What is true here?"
-          value={observation}
-          onChange={(e) => setObservation(e.target.value)}
-        />
-      </div>
-
-      {/* Application (I Will) */}
-      <div className="mb-3">
-        <label className="text-sm font-medium">Application (I Will)</label>
-        <textarea
-          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-          rows={3}
-          placeholder="One concrete step I will take this week…"
-          value={application}
-          onChange={(e) => setApplication(e.target.value)}
-        />
-      </div>
-
-      {/* Prayer */}
-      <div className="mb-3">
-        <label className="text-sm font-medium">Prayer</label>
-        <textarea
-          className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-          rows={3}
-          placeholder="Pray the verse back to God in your own words…"
-          value={prayer}
-          onChange={(e) => setPrayer(e.target.value)}
-        />
-      </div>
-
-      {/* Visibility + Tie-ins */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <label className="text-sm opacity-70">Visibility</label>
-          <select
-            className="rounded-xl border px-3 py-2 text-sm"
-            value={visibility}
-            onChange={(e) => setVisibility(e.target.value as JournalVisibility)}
-          >
-            <option value="private">Private</option>
-            <option value="group">Group-visible</option>
-          </select>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-3">
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={sharePrayer}
-              onChange={(e) => setSharePrayer(e.target.checked)}
-              disabled={!prayer.trim()}
-              title={!prayer.trim() ? 'Enter a prayer first' : ''}
-            />
-            Pray this with my group
-          </label>
-
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={shareWill}
-              onChange={(e) => setShareWill(e.target.checked)}
-              disabled={!application.trim()}
-              title={!application.trim() ? 'Enter an “I Will” first' : ''}
-            />
-            Share “I Will” with leaders
-          </label>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="mt-3 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={saving}
-          className="rounded-xl border px-3 py-2 text-sm hover:shadow-sm disabled:opacity-60"
-        >
-          {saving ? 'Saving…' : 'Save to Journal'}
-        </button>
-        {msg && <div className="text-sm text-green-700">{msg}</div>}
-        {err && <div className="text-sm text-red-600">{err}</div>}
-      </div>
     </div>
   );
 }

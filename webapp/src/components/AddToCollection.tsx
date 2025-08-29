@@ -1,153 +1,99 @@
 import React from 'react';
 import {
   listMyCollections,
-  createCollection,
-  addToCollection,
+  addVerseToCollection,
   type MyCollection,
-} from '../services/engagement';
+} from '../services/library';
 
 export default function AddToCollection({ verseId }: { verseId: string }) {
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [collections, setCollections] = React.useState<MyCollection[]>([]);
-  const [selected, setSelected] = React.useState<string>('');
-  const [creating, setCreating] = React.useState(false);
-  const [newName, setNewName] = React.useState('');
-  const [newIcon, setNewIcon] = React.useState('');
-  const [msg, setMsg] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
+  const [addingId, setAddingId] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
-    if (!open) return;
-    (async () => {
-      try {
-        setLoading(true);
-        const rows = await listMyCollections();
-        setCollections(rows);
-        setSelected(rows[0]?.id ?? '');
-      } catch (e: any) {
-        alert(e?.message ?? 'Failed to load collections');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [open]);
-
-  const create = async () => {
-    if (!newName.trim()) return;
+  const load = async () => {
+    setLoading(true);
+    setErr(null);
     try {
-      setLoading(true);
-      const id = await createCollection(newName.trim(), newIcon.trim() || undefined);
       const rows = await listMyCollections();
       setCollections(rows);
-      setSelected(id);
-      setCreating(false);
-      setNewName(''); setNewIcon('');
     } catch (e: any) {
-      alert(e?.message ?? 'Failed to create collection');
+      setErr(e?.message ?? 'Failed to load collections');
     } finally {
       setLoading(false);
     }
   };
 
-  const add = async () => {
-    if (!selected) return;
-    try {
-      setLoading(true);
-      await addToCollection(selected, verseId);
-      setMsg('Added to collection');
-      setTimeout(() => setMsg(null), 1500);
-    } catch (e: any) {
-      alert(e?.message ?? 'Failed to add to collection');
-    } finally {
-      setLoading(false);
-    }
-  };
+  React.useEffect(() => {
+    if (open) load();
+  }, [open]);
 
   return (
     <div className="relative">
       <button
-        type="button"
+        className="text-sm underline"
         onClick={() => setOpen((s) => !s)}
-        className="px-3 py-1 rounded-xl border hover:shadow-sm"
+        title="Add this verse to one of your collections"
       >
-        Add to Collection
+        Add to collection…
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-72 rounded-xl border bg-white p-3 shadow-md z-20">
-          {loading && <div className="text-sm opacity-70">Loading…</div>}
+        <div className="absolute z-20 mt-2 w-80 rounded-xl border bg-white shadow-lg p-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium">Your Collections</div>
+            <button className="text-sm underline" onClick={load}>Refresh</button>
+          </div>
 
-          {!loading && (
-            <div className="space-y-3">
-              {!creating ? (
-                <>
-                  <div className="flex items-center gap-2">
-                    <select
-                      className="flex-1 rounded-xl border px-3 py-2"
-                      value={selected}
-                      onChange={(e) => setSelected(e.target.value)}
-                    >
-                      {collections.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.icon ? `${c.icon} ` : ''}{c.name} {c.item_count ? `(${c.item_count})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={add}
-                      className="rounded-xl border px-3 py-2 hover:shadow-sm"
-                      disabled={!selected || loading}
-                    >
-                      Add
-                    </button>
-                  </div>
+          {loading && <div className="text-sm opacity-70 mt-2">Loading…</div>}
+          {err && <div className="text-sm text-red-600 mt-2">{err}</div>}
 
-                  <button
-                    type="button"
-                    className="text-sm underline"
-                    onClick={() => setCreating(true)}
-                  >
-                    + New collection
-                  </button>
-                </>
-              ) : (
-                <div className="space-y-2">
-                  <input
-                    className="w-full rounded-xl border px-3 py-2"
-                    placeholder="Collection name (e.g., Identity)"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                  />
-                  <input
-                    className="w-full rounded-xl border px-3 py-2"
-                    placeholder="Icon (optional, e.g., 🔥, ❤️)"
-                    value={newIcon}
-                    onChange={(e) => setNewIcon(e.target.value)}
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="rounded-xl border px-3 py-2 hover:shadow-sm"
-                      onClick={create}
-                      disabled={!newName.trim() || loading}
-                    >
-                      Create
-                    </button>
-                    <button
-                      type="button"
-                      className="text-sm underline"
-                      onClick={() => setCreating(false)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {msg && <div className="text-sm text-green-700">{msg}</div>}
+          {!loading && !err && collections.length === 0 && (
+            <div className="text-sm opacity-70 mt-2">
+              No collections yet. Create one from the Library page.
             </div>
           )}
+
+          {!loading && !err && collections.length > 0 && (
+            <ul className="mt-2 divide-y">
+              {collections.map((c) => (
+                <li key={c.collection_id} className="py-2 flex items-center justify-between gap-2">
+                  <div className="text-sm">
+                    <div className="font-medium">{c.name}</div>
+                    <div className="text-[11px] opacity-60">
+                      {c.item_count} item{c.item_count === 1 ? '' : 's'}
+                    </div>
+                  </div>
+                  <button
+                    className="text-sm underline disabled:opacity-50"
+                    disabled={addingId === c.collection_id}
+onClick={async () => {
+  setAddingId(c.collection_id);
+  try {
+    const cid = (c as any).collection_id ?? (c as any).id;  // <— fallback if needed
+    if (!cid) throw new Error('No collection id available');
+    console.log('AddToCollection: using collection_id', cid);
+    await addVerseToCollection(cid, verseId);
+    alert(`Added to "${c.name}".`);
+    setOpen(false);
+  } catch (e: any) {
+    alert(e?.message ?? 'Failed to add');
+  } finally {
+    setAddingId(null);
+  }
+}}
+                  >
+                    {addingId === c.collection_id ? 'Adding…' : 'Add'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="mt-2 text-right">
+            <button className="text-sm underline" onClick={() => setOpen(false)}>Close</button>
+          </div>
         </div>
       )}
     </div>

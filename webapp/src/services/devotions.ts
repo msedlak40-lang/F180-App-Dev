@@ -1,208 +1,48 @@
+// webapp/src/services/devotions.ts
 import { supabase } from '../lib/supabaseClient';
 
-export type DevotionVisibility = 'private' | 'leaders' | 'group';
+/* ===================== Types ===================== */
+
+export type DevotionVisibility = 'group' | 'leaders' | 'private';
 
 export type DevSeries = {
   id: string;
+  group_id: string;
   title: string;
   description: string | null;
   visibility: DevotionVisibility;
-  owner_id: string;
-  is_automated: boolean;
   created_at: string;
 };
-
-export type ScriptureRef = { reference: string; text: string };
 
 export type DevEntry = {
   id: string;
+  series_id: string;
   day_index: number;
+  title: string;
+  body_md: string | null;
+  status: 'draft' | 'scheduled' | 'published';
   scheduled_date: string | null; // YYYY-MM-DD
-  status: 'draft' | 'scheduled' | 'published' | string;
-  title: string;
-  body_md: string;
-  scriptures: ScriptureRef[];
-  author_id: string;
   created_at: string;
-  published_at: string | null;
 };
 
-// --- Series ---
-export async function listSeriesForGroup(groupId: string): Promise<DevSeries[]> {
-  const { data, error } = await supabase.rpc('dev_list_series_for_group', { p_group_id: groupId });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DevSeries[];
-}
-
-export async function createSeries(
-  groupId: string | null,
-  title: string,
-  description?: string | null,
-  visibility: DevotionVisibility = 'group'
-): Promise<string> {
-  const { data, error } = await supabase.rpc('dev_create_series', {
-    p_group_id: groupId,
-    p_title: title,
-    p_description: description ?? null,
-    p_visibility: visibility,
-  });
-  if (error) throw new Error(error.message);
-  return data as string; // series_id
-}
-
-export async function updateSeries(
-  seriesId: string,
-  patch: Partial<{
-    title: string;
-    description: string | null;
-    visibility: DevotionVisibility;
-    start_date: string | null; // YYYY-MM-DD
-    timezone: string | null;
-    is_automated: boolean;
-    generator_config: any;
-  }>
-) {
-  const { error } = await supabase.rpc('dev_update_series', {
-    p_series_id: seriesId,
-    p_title: patch.title ?? null,
-    p_description: patch.description ?? null,
-    p_visibility: patch.visibility ?? null,
-    p_start_date: patch.start_date ?? null,
-    p_timezone: patch.timezone ?? null,
-    p_is_automated: patch.is_automated ?? null,
-    p_generator_config: patch.generator_config ?? null,
-  });
+// Accept a collaborator invite by token
+export async function acceptInvite(token: string): Promise<void> {
+  const { error } = await supabase.rpc('dev_accept_invite', { p_token: token });
   if (error) throw new Error(error.message);
 }
 
-export async function deleteSeries(seriesId: string) {
-  const { error } = await supabase.rpc('dev_delete_series', { p_series_id: seriesId });
-  if (error) throw new Error(error.message);
-}
-
-// --- Entries ---
-export async function listEntries(seriesId: string): Promise<DevEntry[]> {
-  const { data, error } = await supabase.rpc('dev_list_entries', { p_series_id: seriesId });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DevEntry[];
-}
-
-export async function addEntry(
-  seriesId: string,
-  dayIndex: number,
-  title: string,
-  bodyMd: string,
-  options?: {
-    scriptures?: ScriptureRef[];
-    status?: 'draft' | 'scheduled' | 'published';
-    scheduled_date?: string | null; // YYYY-MM-DD
-  }
-): Promise<string> {
-  const { data, error } = await supabase.rpc('dev_add_entry', {
-    p_series_id: seriesId,
-    p_day_index: dayIndex,
-    p_title: title,
-    p_body_md: bodyMd,
-    p_scriptures: options?.scriptures ?? [],
-    p_status: options?.status ?? 'draft',
-    p_scheduled_date: options?.scheduled_date ?? null,
-  });
-  if (error) throw new Error(error.message);
-  return data as string; // entry_id
-}
-
-export async function updateEntry(
-  entryId: string,
-  patch: Partial<{
-    day_index: number;
-    title: string;
-    body_md: string;
-    scriptures: ScriptureRef[];
-    status: 'draft' | 'scheduled' | 'published';
-    scheduled_date: string | null;
-  }>
-) {
-  const { error } = await supabase.rpc('dev_update_entry', {
-    p_entry_id: entryId,
-    p_day_index: patch.day_index ?? null,
-    p_title: patch.title ?? null,
-    p_body_md: patch.body_md ?? null,
-    p_scriptures: patch.scriptures ?? null,
-    p_status: patch.status ?? null,
-    p_scheduled_date: patch.scheduled_date ?? null,
-  });
-  if (error) throw new Error(error.message);
-}
-
-export async function deleteEntry(entryId: string) {
-  const { error } = await supabase.rpc('dev_delete_entry', { p_entry_id: entryId });
-  if (error) throw new Error(error.message);
-}
-
-// --- Reads + Subs (stubs for later UI steps) ---
-export async function markRead(entryId: string) {
-  const { error } = await supabase.rpc('dev_mark_read', { p_entry_id: entryId });
-  if (error) throw new Error(error.message);
-}
-
-export type GeneratedDevotion = {
-  title: string;
-  body_md: string;
-  scriptures: ScriptureRef[];
-};
-
-export async function generateDevotion(
-  mode: 'title' | 'assist',
-  title: string,
-  notes?: string
-): Promise<GeneratedDevotion> {
-  const { data, error } = await supabase.functions.invoke('generate-devotion', {
-    body: { mode, title, notes },
-  });
-  if (error) throw new Error(error.message ?? 'Failed to generate devotion');
-  return data as GeneratedDevotion;
-}
-
-// ---- Collaborators ----
 export type DevCollaborator = {
   user_id: string;
   role: 'editor' | 'viewer';
-  email: string;
-  display_name: string;
+  display_name: string | null;
+  email: string | null;
 };
 
-export async function listCollaborators(seriesId: string): Promise<DevCollaborator[]> {
-  const { data, error } = await supabase.rpc('dev_list_collaborators', { p_series_id: seriesId });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DevCollaborator[];
-}
-
-export async function addCollaboratorByEmail(
-  seriesId: string,
-  email: string,
-  role: 'editor' | 'viewer' = 'editor'
-) {
-  const { error } = await supabase.rpc('dev_add_collaborator_by_email', {
-    p_series_id: seriesId,
-    p_email: email,
-    p_role: role,
-  });
-  if (error) throw new Error(error.message);
-}
-
-export async function removeCollaboratorByUser(seriesId: string, userId: string) {
-  const { error } = await supabase.rpc('dev_remove_collaborator_by_user', {
-    p_series_id: seriesId,
-    p_user_id: userId,
-  });
-  if (error) throw new Error(error.message);
-}
-
-// ---- Invite links ----
 export type DevInvite = {
   id: string;
   token: string;
   role: 'editor' | 'viewer';
+  email_lock: string | null;
   max_uses: number;
   used_count: number;
   expires_at: string | null;
@@ -210,100 +50,331 @@ export type DevInvite = {
   created_at: string;
 };
 
-export async function createInviteLink(
-  seriesId: string,
-  role: 'editor' | 'viewer' = 'editor',
-  expiresInDays = 7,
-  maxUses = 1
-): Promise<{ invite_id: string; token: string; expires_at: string | null }> {
-  const { data, error } = await supabase.rpc('dev_create_invite_link', {
-    p_series_id: seriesId,
-    p_role: role,
-    p_expires_in_days: expiresInDays,
-    p_max_uses: maxUses,
-  });
-  if (error) throw new Error(error.message);
-  // rpc returns a row { invite_id, token, expires_at }
-  return data as any;
-}
+export type GeneratedDevotion = {
+  title: string;
+  body_md: string;
+  scriptures?: { reference: string; text: string }[];
+};
 
-export async function listInvites(seriesId: string): Promise<DevInvite[]> {
-  const { data, error } = await supabase.rpc('dev_list_invites', { p_series_id: seriesId });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DevInvite[];
-}
-
-export async function revokeInvite(inviteId: string) {
-  const { error } = await supabase.rpc('dev_revoke_invite', { p_invite_id: inviteId });
-  if (error) throw new Error(error.message);
-}
-
-export async function acceptInvite(token: string) {
-  const { error } = await supabase.rpc('dev_accept_invite', { p_token: token });
-  if (error) throw new Error(error.message);
-}
-
-export async function mySeriesCapabilities(seriesId: string): Promise<{
-  can_read: boolean; can_edit: boolean; my_role: string | null;
-}> {
-  const { data, error } = await supabase.rpc('dev_my_series_capabilities', { p_series_id: seriesId });
-  if (error) throw new Error(error.message);
-  // RPC returns a single row
-  const row = Array.isArray(data) ? data[0] : data;
-  return (row ?? { can_read: false, can_edit: false, my_role: null }) as any;
-}
-
-// ===== Multi-day generation via Edge Function =====
 export type SeriesDraftItem = {
   title: string;
   body_md: string;
   scriptures?: { reference: string; text: string }[];
 };
 
+/* ===================== Series ===================== */
+
+export async function listSeriesForGroup(groupId: string): Promise<DevSeries[]> {
+  const { data, error } = await supabase
+    .from('devotion_series')
+    .select('id, group_id, title, description, visibility, created_at')
+    .eq('group_id', groupId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as DevSeries[];
+}
+
+export async function createSeries(
+  groupId: string,
+  title: string,
+  description: string | null,
+  visibility: DevotionVisibility
+): Promise<void> {
+  const { error } = await supabase.from('devotion_series').insert({
+    group_id: groupId,
+    title,
+    description,
+    visibility,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function updateSeries(
+  seriesId: string,
+  fields: Partial<Pick<DevSeries, 'title' | 'description' | 'visibility'>>
+): Promise<void> {
+  const { error } = await supabase.from('devotion_series').update(fields).eq('id', seriesId);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteSeries(seriesId: string): Promise<void> {
+  const { error } = await supabase.from('devotion_series').delete().eq('id', seriesId);
+  if (error) throw new Error(error.message);
+}
+
+/* ===================== Entries ===================== */
+
+export async function listEntries(seriesId: string): Promise<DevEntry[]> {
+  const { data, error } = await supabase
+    .from('devotion_entries')
+    .select('id, series_id, day_index, title, body_md, status, scheduled_date, created_at')
+    .eq('series_id', seriesId)
+    .order('day_index', { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as DevEntry[];
+}
+
+// Create a new devotion entry
+export async function addEntry(
+  seriesId: string,
+  dayIndex: number,
+  title: string,
+  bodyMd: string,
+  options?: {
+    status?: 'draft' | 'scheduled' | 'published';
+    scheduled_date?: string | null;
+    scriptures?: { reference: string; text: string }[];
+  }
+): Promise<void> {
+  const insert: Record<string, any> = {
+    series_id: seriesId,
+    day_index: dayIndex,
+    title,
+    body_md: bodyMd,
+    status: options?.status ?? 'draft',
+    scheduled_date: options?.scheduled_date ?? null,
+  };
+
+  if (options?.scriptures && Array.isArray(options.scriptures) && options.scriptures.length > 0) {
+    insert.scriptures = options.scriptures; // retries below if column doesn't exist
+  }
+
+  let { error } = await supabase.from('devotion_entries').insert(insert);
+  if (error) {
+    if (/column .*scriptures/i.test(error.message)) {
+      delete insert.scriptures;
+      const retry = await supabase.from('devotion_entries').insert(insert);
+      if (retry.error) throw new Error(retry.error.message);
+    } else {
+      throw new Error(error.message);
+    }
+  }
+}
+
+export async function updateEntry(
+  entryId: string,
+  fields: Partial<Pick<DevEntry, 'day_index' | 'title' | 'body_md' | 'status' | 'scheduled_date'>>
+): Promise<void> {
+  const { error } = await supabase.from('devotion_entries').update(fields).eq('id', entryId);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteEntry(entryId: string): Promise<void> {
+  const { error } = await supabase.from('devotion_entries').delete().eq('id', entryId);
+  if (error) throw new Error(error.message);
+}
+
+/* ========= Multi-day generator bulk insert ========= */
+
+export async function bulkAddEntries(
+  seriesId: string,
+  startDate: string, // YYYY-MM-DD
+  drafts: SeriesDraftItem[],
+  cadenceDays = 1
+): Promise<number> {
+  const start = new Date(`${startDate}T00:00:00`);
+  if (isNaN(start.getTime())) throw new Error('Invalid start date');
+  const cadence = Math.max(1, cadenceDays);
+
+  const rows = drafts.map((d, idx) => {
+    const dt = new Date(start);
+    dt.setDate(dt.getDate() + idx * cadence);
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const day = String(dt.getDate()).padStart(2, '0');
+    const sched = `${y}-${m}-${day}`;
+    const row: Record<string, any> = {
+      series_id: seriesId,
+      day_index: idx + 1,
+      title: d.title,
+      body_md: d.body_md,
+      status: 'scheduled',
+      scheduled_date: sched,
+    };
+    if (Array.isArray(d.scriptures) && d.scriptures.length) row.scriptures = d.scriptures;
+    return row;
+  });
+
+  let { data, error } = await supabase.from('devotion_entries').insert(rows).select('id');
+  if (error) {
+    if (/column .*scriptures/i.test(error.message)) {
+      rows.forEach((r) => delete r.scriptures);
+      const retry = await supabase.from('devotion_entries').insert(rows).select('id');
+      if (retry.error) throw new Error(retry.error.message);
+      return retry.data?.length ?? 0;
+    }
+    throw new Error(error.message);
+  }
+  return data?.length ?? 0;
+}
+
+/* ===================== Collaborators ===================== */
+
+export async function listCollaborators(seriesId: string): Promise<DevCollaborator[]> {
+  // 1) fetch collaborators
+  const { data: collab, error: e1 } = await supabase
+    .from('devotion_collaborators')
+    .select('user_id, role')
+    .eq('series_id', seriesId);
+  if (e1) throw new Error(e1.message);
+
+  const rows = collab ?? [];
+  if (rows.length === 0) return [];
+
+  // 2) fetch profiles in one query
+  const userIds = rows.map((r) => r.user_id);
+  const { data: profiles, error: e2 } = await supabase
+    .from('profiles')
+    .select('id, display_name, email')
+    .in('id', userIds);
+  if (e2) throw new Error(e2.message);
+
+  const map = new Map<string, { display_name: string | null; email: string | null }>();
+  (profiles ?? []).forEach((p: any) => map.set(p.id, { display_name: p.display_name ?? null, email: p.email ?? null }));
+
+  return rows.map((r: any) => ({
+    user_id: r.user_id,
+    role: r.role,
+    display_name: map.get(r.user_id)?.display_name ?? null,
+    email: map.get(r.user_id)?.email ?? null,
+  }));
+}
+
+export async function removeCollaboratorByUser(seriesId: string, userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('devotion_collaborators')
+    .delete()
+    .match({ series_id: seriesId, user_id: userId });
+  if (error) throw new Error(error.message);
+}
+
+/* ===================== Invites ===================== */
+
+export async function listInvites(seriesId: string): Promise<DevInvite[]> {
+  const { data, error } = await supabase
+    .from('devotion_invites')
+    .select('id, token, role, email_lock, max_uses, used_count, expires_at, revoked_at, created_at')
+    .eq('series_id', seriesId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(error.message);
+
+  return (data ?? []).map((r: any) => ({
+    ...r,
+    role: String(r.role) as 'editor' | 'viewer',
+    email_lock: r.email_lock ?? null,
+    expires_at: r.expires_at ?? null,
+    revoked_at: r.revoked_at ?? null,
+  })) as DevInvite[];
+}
+
+export async function revokeInvite(inviteId: string): Promise<void> {
+  const { error } = await supabase
+    .from('devotion_invites')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('id', inviteId);
+  if (error) throw new Error(error.message);
+}
+
+// Create a single-use invite link (optionally locked to an email)
+export async function createInviteLinkSimple(
+  seriesId: string,
+  role: 'editor' | 'viewer',
+  email?: string
+): Promise<{ id: string; token: string; role: string; email_lock: string | null }> {
+  const { data, error } = await supabase.rpc('dev_create_invite_link_simple', {
+    p_series_id: seriesId,
+    p_role: role,
+    p_email: email ?? null,
+  });
+  if (error) throw new Error(error.message);
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    id: row.id,
+    token: row.token,
+    role: row.role,
+    email_lock: row.email_lock ?? null,
+  };
+}
+
+/* ===================== Capabilities ===================== */
+
+export async function mySeriesCapabilities(seriesId: string): Promise<{ can_edit: boolean }> {
+  // Try RPC if it exists
+  try {
+    const { data, error } = await supabase.rpc('fn_can_edit_series', { p_series_id: seriesId });
+    if (!error && typeof data === 'boolean') return { can_edit: !!data };
+  } catch {
+    // ignore
+  }
+  // Fallback: check collaborator role
+  const { data: user } = await supabase.auth.getUser();
+  const uid = user?.user?.id;
+  if (!uid) return { can_edit: false };
+
+  const { data: rows, error } = await supabase
+    .from('devotion_collaborators')
+    .select('role')
+    .match({ series_id: seriesId, user_id: uid })
+    .limit(1);
+  if (error) return { can_edit: false };
+  return { can_edit: (rows?.[0]?.role ?? '') === 'editor' };
+}
+
+/* ===================== AI Generation ===================== */
+
+async function invokeFirst<T = any>(names: string[], body: any): Promise<T> {
+  let lastErr: any = null;
+  for (const name of names) {
+    try {
+      const { data, error } = await supabase.functions.invoke(name, { body });
+      if (!error && data) return data as T;
+      lastErr = error;
+    } catch (e: any) {
+      lastErr = e;
+    }
+  }
+  throw new Error(lastErr?.message || 'AI function not available');
+}
+
+export async function generateDevotion(
+  mode: 'title' | 'assist',
+  title: string,
+  notes?: string
+): Promise<GeneratedDevotion> {
+  const payload = { mode, title, notes: notes ?? null };
+  // Try a few common function names depending on your deployment
+  return invokeFirst<GeneratedDevotion>(['dev-generate', 'dev_generate', 'devotion-generate'], payload);
+}
+
 export async function generateDevotionSeries(
   theme: string,
   days: number,
-  notes?: string,
-  tone?: string
-) {
-  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-devotion-series`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-    },
-    body: JSON.stringify({ theme, days, notes, tone }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Edge function error ${res.status}: ${text}`);
+  notes?: string
+): Promise<SeriesDraftItem[]> {
+  const payload = { theme, days, notes: notes ?? null };
+  return invokeFirst<SeriesDraftItem[]>(
+    ['dev-generate-series', 'dev_generate_series', 'devotion-generate-series'],
+    payload
+  );
+}
+
+/* ===================== Subscriptions (email/SMS) ===================== */
+
+export async function mySubscriptions(seriesId: string): Promise<Array<'email' | 'sms'>> {
+  try {
+    const { data, error } = await supabase.rpc('dev_my_subscriptions', { p_series_id: seriesId });
+    if (error) return [];
+    // Expecting array of strings like ['email','sms']
+    return Array.isArray(data) ? (data as Array<'email' | 'sms'>) : [];
+  } catch {
+    return [];
   }
-  const json = await res.json();
-  const items = Array.isArray(json?.items) ? json.items : [];
-  if (!items.length) throw new Error('No draft items returned');
-  return items as SeriesDraftItem[];
 }
 
-// ===== Bulk insert entries (auto-scheduled) =====
-export async function bulkAddEntries(
-  seriesId: string,
-  startDate: string, // 'YYYY-MM-DD'
-  items: SeriesDraftItem[],
-  cadenceDays = 1
-) {
-  const { data, error } = await supabase.rpc('dev_bulk_add_entries', {
-    p_series_id: seriesId,
-    p_start_date: startDate,
-    p_items: items,
-    p_cadence_days: cadenceDays,
-  });
-  if (error) throw new Error(error.message);
-  return (data ?? 0) as number;
-}
-
-// ===== Subscriptions (email/SMS) =====
-export async function subscribeSeries(seriesId: string, channel: 'email' | 'sms' = 'email') {
+export async function subscribeSeries(seriesId: string, channel: 'email' | 'sms'): Promise<void> {
   const { error } = await supabase.rpc('dev_subscribe_series', {
     p_series_id: seriesId,
     p_channel: channel,
@@ -311,7 +382,7 @@ export async function subscribeSeries(seriesId: string, channel: 'email' | 'sms'
   if (error) throw new Error(error.message);
 }
 
-export async function unsubscribeSeries(seriesId: string, channel: 'email' | 'sms' = 'email') {
+export async function unsubscribeSeries(seriesId: string, channel: 'email' | 'sms'): Promise<void> {
   const { error } = await supabase.rpc('dev_unsubscribe_series', {
     p_series_id: seriesId,
     p_channel: channel,
@@ -319,27 +390,56 @@ export async function unsubscribeSeries(seriesId: string, channel: 'email' | 'sm
   if (error) throw new Error(error.message);
 }
 
-export async function mySubscriptions(seriesId: string): Promise<Array<'email' | 'sms'>> {
-  const { data, error } = await supabase
-    .from('devotion_series_subscriptions')
-    .select('channel')
-    .eq('series_id', seriesId);
+/* ===================== Highlights (Devotions) ===================== */
+
+export type DevHighlight = {
+  id: string;
+  series_id: string;
+  entry_id: string;
+  user_id: string;
+  start_pos: number;
+  length: number;
+  selected_text: string;
+  body_hash: string | null;
+  color: 'yellow' | 'green' | 'blue' | 'pink' | 'orange';
+  visibility: 'private' | 'group' | 'leaders';
+  note: string | null;
+  created_at: string;
+};
+
+export async function listEntryHighlights(entryId: string): Promise<DevHighlight[]> {
+  const { data, error } = await supabase.rpc('dev_list_highlights_for_entry', { p_entry_id: entryId });
   if (error) throw new Error(error.message);
-  return (data ?? []).map((r: any) => r.channel) as Array<'email' | 'sms'>;
+  return (data ?? []) as DevHighlight[];
 }
 
-export async function createInviteLinkSimple(
-  seriesId: string,
-  role: 'editor' | 'viewer',
-  email?: string
-): Promise<{ id: string; token: string; role: 'editor' | 'viewer'; email_lock: string | null }> {
-  const { data, error } = await supabase.rpc('dev_create_invite_link_simple', {
-    p_series_id: seriesId,
-    p_role: role,
-    p_email: (email || '').trim() || null,
+export async function createEntryHighlight(
+  entryId: string,
+  startPos: number,
+  length: number,
+  selectedText: string,
+  options?: {
+    visibility?: 'private' | 'group' | 'leaders';
+    color?: 'yellow' | 'green' | 'blue' | 'pink' | 'orange';
+    note?: string | null;
+    bodyHash?: string | null;
+  }
+): Promise<string> {
+  const { data, error } = await supabase.rpc('dev_create_highlight', {
+    p_entry_id: entryId,
+    p_start_pos: startPos,
+    p_length: length,
+    p_selected_text: selectedText,
+    p_visibility: options?.visibility ?? 'private',
+    p_color: options?.color ?? 'yellow',
+    p_note: options?.note ?? null,
+    p_body_hash: options?.bodyHash ?? null,
   });
   if (error) throw new Error(error.message);
-  // RPC returns a table; Supabase JS will give an array
-  const row = Array.isArray(data) ? data[0] : data;
-  return row as any;
+  return data as string;
+}
+
+export async function deleteEntryHighlight(highlightId: string): Promise<void> {
+  const { error } = await supabase.rpc('dev_delete_highlight', { p_highlight_id: highlightId });
+  if (error) throw new Error(error.message);
 }

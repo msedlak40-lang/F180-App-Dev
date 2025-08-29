@@ -165,10 +165,11 @@ export default function VerseCard({
         {soapOpen && (
           <div className="border-t p-4">
             <SoapPanel
-              groupId={groupId}
+              groupId={v.group_id}
               verseId={v.id}
+              verseRef={v.reference} 
               scriptureRef={v.reference}
-              scriptureText={v.verse_text}
+              scripture={v.verse_text ?? ''}
               onSaved={onRefresh}
             />
           </div>

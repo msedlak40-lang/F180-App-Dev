@@ -1,4 +1,5 @@
 import React from 'react';
+import { supabase } from '../../lib/supabaseClient';
 import {
   // series + entries
   listSeriesForGroup,
@@ -26,6 +27,10 @@ import {
   subscribeSeries,
   unsubscribeSeries,
   mySubscriptions,
+  // highlights
+  listEntryHighlights,
+  createEntryHighlight,
+  deleteEntryHighlight,
   // types
   type GeneratedDevotion,
   type DevSeries,
@@ -34,6 +39,7 @@ import {
   type DevotionVisibility,
   type DevInvite,
   type SeriesDraftItem,
+  type DevHighlight,
 } from '../../services/devotions';
 
 /* ---------- Inline helper: optional AI assist for drafting single entries ---------- */
@@ -521,6 +527,396 @@ function CollaboratorsPanel({ seriesId }: { seriesId: string }) {
   );
 }
 
+/* --------------------- Entry item (edit/delete + highlights) --------------------- */
+function EntryItem({
+  seriesId,
+  en,
+  canEdit,
+  onChanged,
+}: {
+  seriesId: string;
+  en: DevEntry;
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [eDay, setEDay] = React.useState<number>(en.day_index);
+  const [eTitle, setETitle] = React.useState(en.title);
+  const [eBody, setEBody] = React.useState(en.body_md ?? '');
+  const [eStatus, setEStatus] = React.useState<'draft' | 'scheduled' | 'published'>(
+    (['draft','scheduled','published'] as const).includes(en.status as any) ? (en.status as any) : 'draft'
+  );
+  const [eDate, setEDate] = React.useState<string>(en.scheduled_date ?? '');
+  const [savingEntry, setSavingEntry] = React.useState(false);
+  const [deletingEntry, setDeletingEntry] = React.useState(false);
+
+  React.useEffect(() => {
+    setEDay(en.day_index);
+    setETitle(en.title);
+    setEBody(en.body_md ?? '');
+    setEStatus((['draft','scheduled','published'] as const).includes(en.status as any) ? (en.status as any) : 'draft');
+    setEDate(en.scheduled_date ?? '');
+  }, [en.id, en.day_index, en.title, en.body_md, en.status, en.scheduled_date]);
+
+  // Highlights
+  const [highlights, setHighlights] = React.useState<DevHighlight[]>([]);
+  const [loadingHL, setLoadingHL] = React.useState(false);
+  const [me, setMe] = React.useState<string | null>(null);
+
+  // highlight modal
+  const [openHL, setOpenHL] = React.useState(false);
+  const [selStart, setSelStart] = React.useState<number | null>(null);
+  const [selLen, setSelLen] = React.useState<number>(0);
+  const [selText, setSelText] = React.useState<string>('');
+  const [vis, setVis] = React.useState<'private' | 'group' | 'leaders'>('private');
+  const [color, setColor] = React.useState<'yellow' | 'green' | 'blue' | 'pink' | 'orange'>('yellow');
+  const [note, setNote] = React.useState('');
+  const [savingHL, setSavingHL] = React.useState(false);
+  const [deletingId, setDeletingId] = React.useState<string | null>(null);
+
+  const loadHL = async () => {
+    setLoadingHL(true);
+    try {
+      const rows = await listEntryHighlights(en.id);
+      setHighlights(rows);
+    } catch (e:any) {
+      console.warn(e?.message);
+    } finally {
+      setLoadingHL(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadHL();
+    supabase.auth.getUser().then((u) => setMe(u.data.user?.id ?? null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [en.id]);
+
+  // Render body with <mark> spans based on highlights (non-overlapping)
+  const renderBody = React.useMemo(() => {
+    const body = en.body_md ?? '';
+    if (!highlights.length) return <div className="mt-2 text-sm whitespace-pre-wrap">{body}</div>;
+
+    const sorted = [...highlights].sort((a,b) => a.start_pos - b.start_pos);
+    const nodes: React.ReactNode[] = [];
+    let cursor = 0;
+    const colorClass = (c: string) =>
+      c === 'green' ? 'bg-green-200' :
+      c === 'blue' ? 'bg-blue-200' :
+      c === 'pink' ? 'bg-pink-200' :
+      c === 'orange' ? 'bg-orange-200' :
+      'bg-yellow-200';
+
+    sorted.forEach((h, idx) => {
+      const start = Math.max(0, h.start_pos);
+      const end = Math.min(body.length, h.start_pos + h.length);
+      if (end <= cursor) return;
+      if (start > cursor) nodes.push(<span key={`t-${idx}-pre`}>{body.slice(cursor, start)}</span>);
+      nodes.push(
+        <mark
+          key={`h-${h.id}`}
+          className={`rounded px-0.5 ${colorClass(h.color)}`}
+          title={`${h.visibility}${h.note ? ` • ${h.note}` : ''}`}
+        >
+          {body.slice(start, end)}
+        </mark>
+      );
+      cursor = end;
+    });
+    if (cursor < body.length) nodes.push(<span key="t-tail">{body.slice(cursor)}</span>);
+    return <div className="mt-2 text-sm whitespace-pre-wrap">{nodes}</div>;
+  }, [en.body_md, highlights]);
+
+  const saveEntry = async () => {
+    if (savingEntry) return;
+    setSavingEntry(true);
+    try {
+      await updateEntry(en.id, {
+        day_index: eDay,
+        title: eTitle,
+        body_md: eBody,
+        status: eStatus,
+        scheduled_date: eDate || null,
+      });
+      setIsEditing(false);
+      await onChanged();
+    } catch (e: any) {
+      alert(e?.message ?? 'Failed to update entry');
+    } finally {
+      setSavingEntry(false);
+    }
+  };
+
+  const removeEntry = async () => {
+    if (deletingEntry) return;
+    if (!confirm('Delete this entry?')) return;
+    setDeletingEntry(true);
+    try {
+      await deleteEntry(en.id);
+      await onChanged();
+    } catch (e: any) {
+      alert(e?.message ?? 'Failed to delete entry');
+    } finally {
+      setDeletingEntry(false);
+    }
+  };
+
+  const HighlightModal = () => (
+    <div className="mt-3 rounded-xl border p-3 bg-white">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium">Add highlight</div>
+        <button className="text-sm underline" onClick={() => setOpenHL(false)}>Close</button>
+      </div>
+
+      <p className="text-xs opacity-70 mt-1">
+        Select text in the box below, then choose visibility & color. Save to add the highlight.
+      </p>
+
+      <textarea
+        className="w-full mt-2 rounded-xl border px-3 py-2 text-sm"
+        rows={8}
+        readOnly
+        value={en.body_md}
+        onMouseUp={(e) => {
+          const el = e.currentTarget as HTMLTextAreaElement;
+          const start = el.selectionStart ?? 0;
+          const end = el.selectionEnd ?? 0;
+          const len = Math.max(0, end - start);
+          setSelStart(len > 0 ? start : null);
+          setSelLen(len);
+          setSelText(len > 0 ? (en.body_md ?? '').slice(start, end) : '');
+        }}
+      />
+
+      <div className="mt-2 text-xs">
+        <span className="opacity-70">Selected:</span>{' '}
+        {selStart !== null ? `${selLen} chars` : 'none'}
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <div>
+          <label className="text-xs opacity-70">Visibility</label>
+          <select
+            className="w-full rounded-xl border px-3 py-2 text-sm"
+            value={vis}
+            onChange={(e) => setVis(e.target.value as any)}
+          >
+            <option value="private">Private</option>
+            <option value="group">Group</option>
+            <option value="leaders">Leaders</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-xs opacity-70">Color</label>
+          <select
+            className="w-full rounded-xl border px-3 py-2 text-sm"
+            value={color}
+            onChange={(e) => setColor(e.target.value as any)}
+          >
+            <option value="yellow">Yellow</option>
+            <option value="green">Green</option>
+            <option value="blue">Blue</option>
+            <option value="pink">Pink</option>
+            <option value="orange">Orange</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-xs opacity-70">Note (optional)</label>
+          <input
+            className="w-full rounded-xl border px-3 py-2 text-sm"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Why this stood out…"
+          />
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <button
+          className="rounded-xl border px-3 py-2 text-sm hover:shadow-sm disabled:opacity-60"
+          disabled={savingHL || selStart === null || selLen <= 0}
+          onClick={async () => {
+            if (selStart === null || selLen <= 0) return;
+            setSavingHL(true);
+            try {
+              await createEntryHighlight(en.id, selStart, selLen, selText, {
+                visibility: vis,
+                color,
+                note: note.trim() || null,
+                bodyHash: null,
+              });
+              setOpenHL(false);
+              setNote('');
+              setSelStart(null);
+              setSelLen(0);
+              setSelText('');
+              await loadHL();
+            } catch (e:any) {
+              alert(e?.message ?? 'Failed to save highlight (are you a group member?)');
+            } finally {
+              setSavingHL(false);
+            }
+          }}
+        >
+          {savingHL ? 'Saving…' : 'Save highlight'}
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="rounded-xl border p-3 bg-white">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium">
+            Day {en.day_index}: {en.title}
+          </div>
+          <div className="text-xs opacity-70">
+            {en.status}{en.scheduled_date ? ` • ${en.scheduled_date}` : ''}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="text-sm underline" onClick={() => setOpenHL((s) => !s)}>
+            {openHL ? 'Cancel highlight' : 'Highlight…'}
+          </button>
+          {canEdit && !isEditing && (
+            <>
+              <button className="text-sm underline" onClick={() => setIsEditing(true)}>Edit</button>
+              <button
+                className="text-sm underline text-red-600 disabled:opacity-50"
+                onClick={removeEntry}
+                disabled={deletingEntry}
+              >
+                {deletingEntry ? 'Deleting…' : 'Delete'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Body + edit form */}
+      {!isEditing ? (
+        renderBody
+      ) : (
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <div>
+            <label className="text-xs opacity-70">Day #</label>
+            <input
+              type="number"
+              min={1}
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              value={eDay}
+              onChange={(e) => setEDay(parseInt(e.target.value || '1', 10))}
+            />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="text-xs opacity-70">Title</label>
+            <input
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              value={eTitle}
+              onChange={(e) => setETitle(e.target.value)}
+            />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="text-xs opacity-70">Body (Markdown)</label>
+            <textarea
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              rows={6}
+              value={eBody}
+              onChange={(e) => setEBody(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-xs opacity-70">Status</label>
+            <select
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              value={eStatus}
+              onChange={(e) => setEStatus(e.target.value as any)}
+            >
+              <option value="draft">Draft</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="published">Published</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs opacity-70">Scheduled Date (optional)</label>
+            <input
+              type="date"
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              value={eDate}
+              onChange={(e) => setEDate(e.target.value)}
+            />
+          </div>
+          <div className="sm:col-span-4 flex items-center gap-3">
+            <button
+              className="rounded-xl border px-3 py-2 text-sm hover:shadow-sm disabled:opacity-60"
+              onClick={saveEntry}
+              disabled={savingEntry || !eTitle.trim() || !eBody.trim()}
+            >
+              {savingEntry ? 'Saving…' : 'Save'}
+            </button>
+            <button className="text-sm underline" onClick={() => setIsEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add highlight modal */}
+      {openHL && <HighlightModal />}
+
+      {/* Highlights list */}
+      <div className="mt-3">
+        {loadingHL && <div className="text-sm opacity-70">Loading highlights…</div>}
+        {!loadingHL && highlights.length === 0 && (
+          <div className="text-sm opacity-70">No highlights yet.</div>
+        )}
+        <ul className="mt-1 divide-y">
+          {highlights.map(h => (
+            <li key={h.id} className="py-2 flex items-center justify-between gap-3">
+              <div className="text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] rounded-full border px-2 py-0.5 bg-gray-50">
+                    {h.visibility}
+                  </span>
+                  <span className="text-[11px] rounded-full border px-2 py-0.5 bg-gray-50">
+                    {h.color}
+                  </span>
+                </div>
+                <div className="opacity-80 mt-1">
+                  “{h.selected_text.length > 140 ? h.selected_text.slice(0, 140) + '…' : h.selected_text}”
+                </div>
+                {h.note && <div className="text-xs opacity-70 mt-1">Note: {h.note}</div>}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="text-sm underline text-red-600 disabled:opacity-50"
+                  onClick={async () => {
+                    if (!me || me !== h.user_id) { alert('Only the author can delete this highlight.'); return; }
+                    if (!confirm('Delete this highlight?')) return;
+                    setDeletingId(h.id);
+                    try {
+                      await deleteEntryHighlight(h.id);
+                      await loadHL();
+                    } catch (e:any) {
+                      alert(e?.message ?? 'Failed to delete');
+                    } finally {
+                      setDeletingId(null);
+                    }
+                  }}
+                  disabled={!me || me !== h.user_id || deletingId === h.id}
+                >
+                  {deletingId === h.id ? 'Deleting…' : 'Delete'}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------- Series + Entries UI ------------------------- */
 function SeriesCard({
   series,
@@ -539,8 +935,8 @@ function SeriesCard({
       setCanEdit(!!caps.can_edit);
     } catch { setCanEdit(false); }
   };
-  React.useEffect(() => { loadCaps(); /* also refetch on open */ }, [series.id]);
-  React.useEffect(() => { if (open) loadCaps(); }, [open]); // keep in sync
+  React.useEffect(() => { loadCaps(); }, [series.id]);
+  React.useEffect(() => { if (open) loadCaps(); }, [open]);
 
   // series edit
   const [editMode, setEditMode] = React.useState(false);
@@ -560,16 +956,6 @@ function SeriesCard({
   const [body, setBody] = React.useState('');
   const [date, setDate] = React.useState<string>('');
   const [busy, setBusy] = React.useState(false);
-
-  // entry editing
-  const [editingId, setEditingId] = React.useState<string | null>(null);
-  const [eDay, setEDay] = React.useState<number>(1);
-  const [eTitle, setETitle] = React.useState('');
-  const [eBody, setEBody] = React.useState('');
-  const [eStatus, setEStatus] = React.useState<'draft' | 'scheduled' | 'published'>('draft');
-  const [eDate, setEDate] = React.useState<string>('');
-  const [savingEntry, setSavingEntry] = React.useState(false);
-  const [deletingEntryId, setDeletingEntryId] = React.useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -623,51 +1009,6 @@ function SeriesCard({
       alert(e?.message ?? 'Failed to update series');
     } finally {
       setSavingSeries(false);
-    }
-  };
-
-  const startEditEntry = (en: DevEntry) => {
-    setEditingId(en.id);
-    setEDay(en.day_index);
-    setETitle(en.title);
-    setEBody(en.body_md);
-    setEStatus((['draft','scheduled','published'] as const).includes(en.status as any) ? (en.status as any) : 'draft');
-    setEDate(en.scheduled_date ?? '');
-  };
-
-  const saveEntry = async () => {
-    if (!editingId || savingEntry) return;
-    setSavingEntry(true);
-    try {
-      await updateEntry(editingId, {
-        day_index: eDay,
-        title: eTitle,
-        body_md: eBody,
-        status: eStatus,
-        scheduled_date: eDate || null,
-      });
-      setEditingId(null);
-      await load();
-    } catch (e: any) {
-      alert(e?.message ?? 'Failed to update entry');
-    } finally {
-      setSavingEntry(false);
-    }
-  };
-
-  const cancelEntryEdit = () => setEditingId(null);
-
-  const removeEntry = async (id: string) => {
-    if (deletingEntryId) return;
-    if (!confirm('Delete this entry?')) return;
-    setDeletingEntryId(id);
-    try {
-      await deleteEntry(id);
-      await load();
-    } catch (e: any) {
-      alert(e?.message ?? 'Failed to delete entry');
-    } finally {
-      setDeletingEntryId(null);
     }
   };
 
@@ -868,107 +1209,17 @@ function SeriesCard({
             </div>
           )}
 
-          {/* Entries list */}
+          {/* Entries list (with edit/delete + highlights) */}
           <div className="mt-3 space-y-3">
-            {entries.map((en) => {
-              const isEditing = editingId === en.id;
-              return (
-                <div key={en.id} className="rounded-xl border p-3 bg-white">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium">
-                        Day {en.day_index}: {en.title}
-                      </div>
-                      <div className="text-xs opacity-70">
-                        {en.status}{en.scheduled_date ? ` • ${en.scheduled_date}` : ''}
-                      </div>
-                    </div>
-
-                    {canEdit && !isEditing && (
-                      <div className="flex items-center gap-3">
-                        <button className="text-sm underline" onClick={() => startEditEntry(en)}>
-                          Edit
-                        </button>
-                        <button
-                          className="text-sm underline text-red-600 disabled:opacity-50"
-                          onClick={() => removeEntry(en.id)}
-                          disabled={deletingEntryId === en.id}
-                        >
-                          {deletingEntryId === en.id ? 'Deleting…' : 'Delete'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {!isEditing ? (
-                    <div className="mt-2 text-sm whitespace-pre-wrap">{en.body_md}</div>
-                  ) : (
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
-                      <div>
-                        <label className="text-xs opacity-70">Day #</label>
-                        <input
-                          type="number"
-                          min={1}
-                          className="w-full rounded-xl border px-3 py-2 text-sm"
-                          value={eDay}
-                          onChange={(e) => setEDay(parseInt(e.target.value || '1', 10))}
-                        />
-                      </div>
-                      <div className="sm:col-span-3">
-                        <label className="text-xs opacity-70">Title</label>
-                        <input
-                          className="w-full rounded-xl border px-3 py-2 text-sm"
-                          value={eTitle}
-                          onChange={(e) => setETitle(e.target.value)}
-                        />
-                      </div>
-                      <div className="sm:col-span-3">
-                        <label className="text-xs opacity-70">Body (Markdown)</label>
-                        <textarea
-                          className="w-full rounded-xl border px-3 py-2 text-sm"
-                          rows={6}
-                          value={eBody}
-                          onChange={(e) => setEBody(e.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs opacity-70">Status</label>
-                        <select
-                          className="w-full rounded-xl border px-3 py-2 text-sm"
-                          value={eStatus}
-                          onChange={(e) => setEStatus(e.target.value as any)}
-                        >
-                          <option value="draft">Draft</option>
-                          <option value="scheduled">Scheduled</option>
-                          <option value="published">Published</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-xs opacity-70">Scheduled Date (optional)</label>
-                        <input
-                          type="date"
-                          className="w-full rounded-xl border px-3 py-2 text-sm"
-                          value={eDate}
-                          onChange={(e) => setEDate(e.target.value)}
-                        />
-                      </div>
-                      <div className="sm:col-span-4 flex items-center gap-3">
-                        <button
-                          className="rounded-xl border px-3 py-2 text-sm hover:shadow-sm disabled:opacity-60"
-                          onClick={saveEntry}
-                          disabled={savingEntry || !eTitle.trim() || !eBody.trim()}
-                        >
-                          {savingEntry ? 'Saving…' : 'Save'}
-                        </button>
-                        <button className="text-sm underline" onClick={cancelEntryEdit}>
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {entries.map((en) => (
+              <EntryItem
+                key={en.id}
+                seriesId={series.id}
+                en={en}
+                canEdit={canEdit}
+                onChanged={load}
+              />
+            ))}
             {!loading && entries.length === 0 && (
               <div className="text-sm opacity-70">No entries yet.</div>
             )}
