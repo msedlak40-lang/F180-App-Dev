@@ -52,7 +52,7 @@ export default function FiresidePreview() {
               ["Verses","#"],
               ["Devotions","#"],
               ["Journal","#"],
-              ["Chat","#"],
+              ["Inbox","#"],
               ["Prayers","#"],
               ["Library","#"],
             ].map(([label,href]) => (
