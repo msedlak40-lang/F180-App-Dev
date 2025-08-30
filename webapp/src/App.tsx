@@ -6,7 +6,7 @@ import DevotionsTab from './pages/Group/DevotionsTab';
 import StudyTab from './pages/Group/StudyTab';
 import JournalTab from './pages/Group/JournalTab';
 import PrayersTab from './pages/Group/PrayersTab';
-
+import GroupSubNav from './components/GroupSubNav';
 import LibraryPage from './pages/Library/LibraryPage';
 import AcceptStudyInvite from './pages/AcceptStudyInvite';
 import ApprovalsPage from './pages/Admin/ApprovalsPage';
@@ -16,6 +16,7 @@ import LeaderInbox from './components/LeaderInbox';
 import GroupSelector from './components/GroupSelector';
 import AuthBar from './components/AuthBar';
 import { ToastProvider } from './components/ToastProvider';
+import FiresidePreview from './pages/FiresidePreview';
 
 /** Parse the current hash into path + segments + query. */
 function useHashRoute() {
@@ -71,6 +72,7 @@ export default function App() {
         {/* Top row: brand + nav + auth */}
         <div className="max-w-5xl mx-auto p-3 flex items-center justify-between gap-3">
           <div className="text-sm font-semibold">Fireside</div>
+
 
           <div className="flex items-center gap-3">
             {/* Groups → default to current group's Verses, else welcome */}
@@ -137,6 +139,11 @@ export default function App() {
       </div>
     );
   }
+
+// Preview page (kept outside your normal shell to avoid double header)
+if (segments[0] === 'style') {
+  return <FiresidePreview />;
+}
 
   // Standalone pages
   if (segments[0] === 'study-accept') {

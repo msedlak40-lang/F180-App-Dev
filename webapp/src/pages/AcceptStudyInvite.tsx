@@ -1,5 +1,6 @@
 import React from 'react';
-import { acceptInvite, type AcceptStudyInviteResult } from '../services/study';
+//import { acceptInvite, type AcceptStudyInviteResult } from '../services/study';
+import { acceptInvite } from '../services/study';
 
 function useHashQuery() {
   const [q, setQ] = React.useState(() => new URLSearchParams(window.location.hash.split('?')[1] || ''));

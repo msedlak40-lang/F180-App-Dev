@@ -1,765 +1,565 @@
 import React from 'react';
-import {
-  listSeries,
-  createSeries,
-  listEntries,
-  addEntry,
-  updateEntry,
-  deleteEntry,
-  listCollaborators,
-  listInvites,
-  createInvite,
-  addQuestion,
-  addAnswer,
-  listQuestionsWithAnswers,
-  addHighlight,
-  type StudySeries,
-  type StudyEntry,
-  type StudyVisibility,
-  type StudyCollabRole,
-  type QuestionWithAnswers,
-  type StudyCollaborator,
-  type StudyInvite,
-} from '../../services/study';
 import { supabase } from '../../lib/supabaseClient';
+import GenerateStudyModal from '../../components/GenerateStudyModal';
+import ExportStudyButton from '../../components/ExportStudyButton';
 
-/** Read query params from the hash (after #/route?...) */
-function useHashQuery() {
-  const [q, setQ] = React.useState(() => new URLSearchParams(window.location.hash.split('?')[1] || ''));
+import {
+  listSeriesCollaborators,
+  inviteStudyByEmail,
+  createStudyInviteLink,
+  type StudyCollaborator,
+  listMyAnswers,
+  saveMyAnswer,
+  deleteMyAnswer,
+  type StudyAnswer,
+} from '../../services/study';
+
+type StudySeries = {
+  id: string;
+  title: string;
+  description: string | null;
+  visibility: 'group' | 'leader' | 'private';
+  created_at: string;
+};
+
+type StudyEntry = {
+  id: string;
+  title: string | null;
+  content: string | null;
+  focus_ref: string | null;
+  position: number | null;
+};
+
+type StudyQuestion = {
+  id: string;
+  entry_id: string;
+  prompt: string | null;
+  content: string | null;
+  ai_answer: string | null;
+  position: number | null;
+};
+
+function useActiveSeriesIdFromHash() {
+  const [seriesId, setSeriesId] = React.useState<string | null>(null);
+
   React.useEffect(() => {
-    const onHash = () => setQ(new URLSearchParams(window.location.hash.split('?')[1] || ''));
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    const update = () => {
+      const hash = window.location.hash || '#/';
+      const query = hash.split('?')[1] || '';
+      const params = new URLSearchParams(query);
+      setSeriesId(params.get('series'));
+    };
+    update();
+    window.addEventListener('hashchange', update);
+    return () => window.removeEventListener('hashchange', update);
   }, []);
-  return q;
+
+  return seriesId;
 }
 
 export default function StudyTab({ groupId }: { groupId: string }) {
+  const activeSeriesId = useActiveSeriesIdFromHash();
+
+  // Series list
   const [series, setSeries] = React.useState<StudySeries[]>([]);
-  const [selSeries, setSelSeries] = React.useState<StudySeries | null>(null);
-  const [entries, setEntries] = React.useState<StudyEntry[]>([]);
-  const [loadingSeries, setLoadingSeries] = React.useState(true);
+  const [loadingSeries, setLoadingSeries] = React.useState(false);
+  const [seriesErr, setSeriesErr] = React.useState<string | null>(null);
+
+  // Active series entries + questions
+  const [entries, setEntries] = React.useState<(StudyEntry & { questions: StudyQuestion[] })[]>(
+    []
+  );
   const [loadingEntries, setLoadingEntries] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [entriesErr, setEntriesErr] = React.useState<string | null>(null);
 
-  // Create Series form
-  const [showCreate, setShowCreate] = React.useState(false);
-  const [title, setTitle] = React.useState('');
-  const [desc, setDesc] = React.useState('');
-  const [vis, setVis] = React.useState<StudyVisibility>('group');
-  const [creating, setCreating] = React.useState(false);
+  // Toggle for showing AI answers per question
+  const [showAI, setShowAI] = React.useState<Record<string, boolean>>({});
 
-  // Add Entry form
-  const [eTitle, setETitle] = React.useState('');
-  const [eRef, setERef] = React.useState('');
-  const [eContent, setEContent] = React.useState('');
-  const [addingEntry, setAddingEntry] = React.useState(false);
-
-  // Collab/Invites
-  const isEditor = selSeries?.my_role === 'owner' || selSeries?.my_role === 'editor';
+  // --- collaborators state (inline panel) ---
   const [collabs, setCollabs] = React.useState<StudyCollaborator[]>([]);
-  const [invites, setInvites] = React.useState<StudyInvite[]>([]);
-  const [inviting, setInviting] = React.useState(false);
-  const [inviteRole, setInviteRole] = React.useState<StudyCollabRole>('viewer');
-  const [lastInviteUrl, setLastInviteUrl] = React.useState<string | null>(null);
+  const [collabLoading, setCollabLoading] = React.useState(false);
+  const [collabErr, setCollabErr] = React.useState<string | null>(null);
+  const [invEmail, setInvEmail] = React.useState('');
+  const [invRole, setInvRole] = React.useState<'viewer' | 'editor'>('viewer');
+  const [linkRole, setLinkRole] = React.useState<'viewer' | 'editor'>('viewer');
+  const [linkUrl, setLinkUrl] = React.useState<string | null>(null);
+  const [collabWorking, setCollabWorking] = React.useState(false);
 
-  const hashQ = useHashQuery();
+  // --- my answers state ---
+  const [myAnswers, setMyAnswers] = React.useState<Record<string, StudyAnswer>>({});
+  const [drafts, setDrafts] = React.useState<Record<string, string>>({});
+  const [savingQ, setSavingQ] = React.useState<string | null>(null);
+  const [errQ, setErrQ] = React.useState<Record<string, string>>({});
 
-  // Load series for this group — IMPORTANT: no selSeries in deps to avoid loops
-  const loadSeries = React.useCallback(async () => {
-    setLoadingSeries(true);
-    setError(null);
-    try {
-      const rows = await listSeries(groupId);
-      setSeries(rows);
-      // Keep previous selection if it still exists
-      setSelSeries((prev) => (prev ? rows.find((s) => s.id === prev.id) || prev : prev));
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to load study series');
-    } finally {
-      setLoadingSeries(false);
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadSeries() {
+      setLoadingSeries(true);
+      setSeriesErr(null);
+      try {
+        const { data, error } = await supabase
+          .from('study_series')
+          .select('id, title, description, created_at, visibility')
+          .eq('group_id', groupId)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        if (!mounted) return;
+        setSeries((data ?? []) as StudySeries[]);
+      } catch (e: any) {
+        if (!mounted) return;
+        setSeriesErr(e?.message ?? 'Failed to load study series');
+      } finally {
+        if (mounted) setLoadingSeries(false);
+      }
     }
+    loadSeries();
+    return () => {
+      mounted = false;
+    };
   }, [groupId]);
 
-  // Load entries for the selected series
-  const loadEntries = React.useCallback(async (seriesId: string) => {
-    setLoadingEntries(true);
-    setError(null);
-    try {
-      const rows = await listEntries(seriesId);
-      setEntries(rows);
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to load entries');
-    } finally {
-      setLoadingEntries(false);
+  React.useEffect(() => {
+    if (!activeSeriesId) {
+      setEntries([]);
+      setEntriesErr(null);
+      setMyAnswers({});
+      setDrafts({});
+      return;
     }
-  }, []);
-
-  // Load collabs & invites (editors only)
-  const loadCollabsInvites = React.useCallback(
-    async (seriesId: string) => {
+    let mounted = true;
+    async function loadEntriesAndQuestions() {
+      setLoadingEntries(true);
+      setEntriesErr(null);
       try {
-        if (!isEditor) {
-          setCollabs([]);
-          setInvites([]);
-          return;
+        // entries first
+        const { data: entriesData, error: eErr } = await supabase
+          .from('study_entries')
+          .select('id, title, content, focus_ref, position')
+          .eq('series_id', activeSeriesId)
+          .order('position', { ascending: true });
+        if (eErr) throw eErr;
+
+        const entryList = (entriesData ?? []) as StudyEntry[];
+        const entryIds = entryList.map((e) => e.id);
+
+        let questionsByEntry: Record<string, StudyQuestion[]> = {};
+        if (entryIds.length) {
+          const { data: qs, error: qErr } = await supabase
+            .from('study_questions')
+            .select('id, entry_id, prompt, content, ai_answer, position')
+            .in('entry_id', entryIds)
+            .order('entry_id', { ascending: true })
+            .order('position', { ascending: true });
+          if (qErr) throw qErr;
+
+          (qs ?? []).forEach((q) => {
+            const key = (q as any).entry_id as string;
+            (questionsByEntry[key] ||= []).push(q as StudyQuestion);
+          });
         }
-        const [c, i] = await Promise.all([listCollaborators(seriesId), listInvites(seriesId)]);
-        setCollabs(c);
-        setInvites(i);
-      } catch {
-        /* ignore */
+
+        const composed = entryList.map((e) => ({
+          ...e,
+          questions: questionsByEntry[e.id] ?? [],
+        }));
+
+        if (!mounted) return;
+        setEntries(composed);
+
+        // Load my answers for these questions and seed drafts
+        const qids: string[] = [];
+        composed.forEach((en) => en.questions.forEach((q) => qids.push(q.id)));
+        if (qids.length) {
+          try {
+            const mine = await listMyAnswers(qids);
+            if (!mounted) return;
+            setMyAnswers(mine);
+            const init: Record<string, string> = {};
+            Object.entries(mine).forEach(([qid, ans]) => {
+              init[qid] = ans.content ?? '';
+            });
+            setDrafts(init);
+          } catch (err) {
+            console.warn('load my answers failed', err);
+          }
+        } else {
+          setMyAnswers({});
+          setDrafts({});
+        }
+      } catch (e: any) {
+        if (!mounted) return;
+        setEntriesErr(e?.message ?? 'Failed to load entries/questions');
+      } finally {
+        if (mounted) setLoadingEntries(false);
       }
-    },
-    [isEditor]
-  );
-
-  // On group change: reset selection and fetch series
-  React.useEffect(() => {
-    setSelSeries(null);
-    setEntries([]);
-    loadSeries();
-  }, [groupId, loadSeries]);
-
-  // Realtime: subscribe once per group/selection; avoid function deps
-  React.useEffect(() => {
-    const channelName = `study-rt-${groupId}-${selSeries?.id ?? 'none'}`;
-    const ch = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'study_series' }, () => {
-        // Any series change in this group → refresh list
-        loadSeries();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'study_entries' }, (payload) => {
-        // Refresh entries only if this event touches our selected series
-        const sid = (payload.new as any)?.series_id ?? (payload.old as any)?.series_id;
-        if (sid && sid === selSeries?.id) {
-          loadEntries(sid);
-        }
-      })
-      .subscribe();
+    }
+    loadEntriesAndQuestions();
     return () => {
-      supabase.removeChannel(ch);
+      mounted = false;
     };
-  }, [groupId, selSeries?.id, loadSeries, loadEntries]);
+  }, [activeSeriesId]);
 
-  // Hash deep-link: auto-select series and scroll to entry if provided
+  // Load collaborators when a series is active
   React.useEffect(() => {
-    const sid = hashQ.get('series');
-    if (!sid || series.length === 0) return;
-    const s = series.find((x) => x.id === sid);
-    if (!s) return;
-
+    if (!activeSeriesId) {
+      setCollabs([]);
+      setLinkUrl(null);
+      return;
+    }
     (async () => {
-      setSelSeries(s);
-      await loadEntries(s.id);
-      await loadCollabsInvites(s.id);
-      const eid = hashQ.get('entry');
-      if (eid) {
-        setTimeout(() => {
-          const el = document.getElementById(`entry-${eid}`);
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
+      setCollabLoading(true);
+      setCollabErr(null);
+      try {
+        const rows = await listSeriesCollaborators(activeSeriesId);
+        setCollabs(rows);
+      } catch (e: any) {
+        setCollabErr(e?.message ?? 'Failed to load collaborators');
+      } finally {
+        setCollabLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [series, hashQ]);
+  }, [activeSeriesId]);
 
-  async function handleCreateSeries(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim()) return;
-    setCreating(true);
-    setError(null);
+  function setDraft(qid: string, text: string) {
+    setDrafts((prev) => ({ ...prev, [qid]: text }));
+  }
+
+  async function onSaveAnswer(qid: string) {
+    const text = (drafts[qid] ?? '').trim();
+    if (!text) return;
+    setSavingQ(qid);
+    setErrQ((prev) => ({ ...prev, [qid]: '' }));
     try {
-      const newId = await createSeries({
-        group_id: groupId,
-        title: title.trim(),
-        description: desc.trim() || undefined,
-        visibility: vis,
-      });
-      setTitle('');
-      setDesc('');
-      setVis('group');
-      setShowCreate(false);
-
-      // Refresh list once, then select the created series and load its data
-      await loadSeries();
-      // select newly created series directly via id
-      const s = (await listSeries(groupId)).find((x) => x.id === newId) || null;
-      if (s) {
-        setSelSeries(s);
-        await loadEntries(newId);
-        await loadCollabsInvites(newId);
-      }
+      const saved = await saveMyAnswer(qid, text);
+      setMyAnswers((prev) => ({ ...prev, [qid]: saved }));
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to create series');
+      setErrQ((prev) => ({ ...prev, [qid]: e?.message ?? 'Failed to save' }));
     } finally {
-      setCreating(false);
+      setSavingQ(null);
     }
   }
 
-  async function handleSelectSeries(s: StudySeries) {
-    setSelSeries(s);
-    await loadEntries(s.id);
-    await loadCollabsInvites(s.id);
+  async function onDeleteAnswer(qid: string) {
+    const cur = myAnswers[qid];
+    if (!cur) return;
+    setSavingQ(qid);
+    setErrQ((prev) => ({ ...prev, [qid]: '' }));
+    try {
+      await deleteMyAnswer(cur.id);
+      setMyAnswers((prev) => {
+        const { [qid]: _, ...rest } = prev;
+        return rest;
+      });
+      setDrafts((prev) => ({ ...prev, [qid]: '' }));
+    } catch (e: any) {
+      setErrQ((prev) => ({ ...prev, [qid]: e?.message ?? 'Failed to delete' }));
+    } finally {
+      setSavingQ(null);
+    }
   }
 
-  async function handleAddEntry(e: React.FormEvent) {
+  async function onInviteEmail(e: React.FormEvent) {
     e.preventDefault();
-    if (!selSeries) return;
-    if (!eTitle.trim()) return;
-    setAddingEntry(true);
-    setError(null);
+    if (!activeSeriesId || !invEmail.trim()) return;
+    setCollabWorking(true);
+    setCollabErr(null);
     try {
-      await addEntry({
-        series_id: selSeries.id,
-        title: eTitle.trim(),
-        focus_ref: eRef.trim() || undefined,
-        content: eContent || undefined,
-        position: (entries[entries.length - 1]?.position ?? 0) + 1,
-      });
-      setETitle('');
-      setERef('');
-      setEContent('');
-      await loadEntries(selSeries.id);
+      await inviteStudyByEmail(activeSeriesId, invEmail.trim(), invRole);
+      setInvEmail('');
+      const rows = await listSeriesCollaborators(activeSeriesId);
+      setCollabs(rows);
     } catch (err: any) {
-      setError(err?.message ?? 'Failed to add entry');
+      setCollabErr(err?.message ?? 'Invite failed');
     } finally {
-      setAddingEntry(false);
+      setCollabWorking(false);
     }
   }
 
-  async function createInviteLink() {
-    if (!selSeries) return;
-    setInviting(true);
-    setLastInviteUrl(null);
+  async function onCreateLink() {
+    if (!activeSeriesId) return;
+    setCollabWorking(true);
+    setCollabErr(null);
     try {
-      const token = await createInvite(selSeries.id, inviteRole);
-      const url = `${window.location.origin}/#/study-accept?token=${encodeURIComponent(token)}`;
-      setLastInviteUrl(url);
-      await loadCollabsInvites(selSeries.id);
-      try {
-        await navigator.clipboard.writeText(url);
-      } catch {
-        /* ignore */
-      }
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to create invite');
+      const { url } = await createStudyInviteLink(activeSeriesId, linkRole);
+      setLinkUrl(url);
+      await navigator.clipboard.writeText(url);
+    } catch (err: any) {
+      setCollabErr(err?.message ?? 'Could not create link');
     } finally {
-      setInviting(false);
+      setCollabWorking(false);
+    }
+  }
+
+  function gotoSeries(seriesId: string | null) {
+    const base = `#/group/${groupId}/study`;
+    if (!seriesId) {
+      window.location.hash = base;
+    } else {
+      window.location.hash = `${base}?series=${seriesId}`;
     }
   }
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="rounded-2xl border p-4 bg-white flex items-center justify-between">
-        <div className="text-sm font-semibold">Study Guides</div>
-        <div className="flex items-center gap-2">
-          <button className="text-sm underline" onClick={loadSeries} disabled={loadingSeries}>
-            {loadingSeries ? 'Refreshing…' : 'Refresh'}
-          </button>
-          <button
-            className="rounded-lg px-3 py-1.5 border bg-gray-50 text-sm"
-            onClick={() => setShowCreate((s) => !s)}
-          >
-            {showCreate ? 'Close' : 'New Series'}
-          </button>
+      {/* Header / actions */}
+      <div className="rounded-2xl border p-4 bg-white mb-1">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold">Study</div>
+          <div className="flex items-center gap-2">
+            {/* Actions (no wrapper button here!) */}
+            <GenerateStudyModal groupId={groupId} />
+            {activeSeriesId ? <ExportStudyButton seriesId={activeSeriesId} /> : null}
+          </div>
         </div>
       </div>
 
-      {error && <div className="text-sm text-red-600">{error}</div>}
+      {/* Either series list, or a specific series view */}
+      {!activeSeriesId ? (
+        <div className="rounded-2xl border p-4 bg-white">
+          <div className="text-sm font-semibold mb-2">Your study series</div>
+          {loadingSeries && <div className="text-sm opacity-60">Loading…</div>}
+          {seriesErr && <div className="text-sm text-red-600">{seriesErr}</div>}
+          {!loadingSeries && !seriesErr && series.length === 0 && (
+            <div className="text-sm opacity-70">No study series yet. Generate one to get started.</div>
+          )}
 
-      {/* Create Series */}
-      {showCreate && (
-        <form onSubmit={handleCreateSeries} className="rounded-2xl border p-4 bg-white space-y-3">
-          <div className="text-sm font-medium">Create a new Study Series</div>
-          <div>
-            <label className="text-sm font-medium">Title</label>
-            <input
-              className="w-full border rounded-lg px-3 py-2 text-sm mt-1"
-              placeholder="e.g., Freedom in Christ"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Description (optional)</label>
-            <textarea
-              className="w-full border rounded-lg px-3 py-2 text-sm mt-1"
-              rows={3}
-              placeholder="Short purpose/overview"
-              value={desc}
-              onChange={(e) => setDesc(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium">Visibility</label>
-            <select
-              className="w-full border rounded-lg px-2 py-2 text-sm mt-1"
-              value={vis}
-              onChange={(e) => setVis(e.target.value as StudyVisibility)}
-            >
-              <option value="group">Group</option>
-              <option value="leaders">Leaders</option>
-              <option value="private">Private</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              className="rounded-lg px-3 py-1.5 border bg-gray-50 text-sm disabled:opacity-50"
-              disabled={creating || !title.trim()}
-              type="submit"
-            >
-              {creating ? 'Creating…' : 'Create series'}
-            </button>
-            <button
-              type="button"
-              className="text-sm underline"
-              onClick={() => setShowCreate(false)}
-              disabled={creating}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-
-      {/* Series List */}
-      <div className="rounded-2xl border p-4 bg-white">
-        <div className="text-sm font-medium mb-3">Series in this group</div>
-        {loadingSeries ? (
-          <div className="text-sm opacity-70">Loading…</div>
-        ) : series.length === 0 ? (
-          <div className="text-sm opacity-70">
-            No series yet. Create one above to get started.
-          </div>
-        ) : (
-          <ul className="grid gap-3">
+          <div className="grid gap-3 mt-2">
             {series.map((s) => (
-              <li
-                key={s.id}
-                className={`rounded-xl border p-3 cursor-pointer ${selSeries?.id === s.id ? 'bg-gray-50' : 'bg-white'}`}
-                onClick={() => handleSelectSeries(s)}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold">{s.title}</div>
-                  <div className="text[11px] opacity-60">
-                    {new Date(s.updated_at).toLocaleString()} • {s.visibility}
-                    {s.my_role ? ` • ${s.my_role}` : ''}
+              <div key={s.id} className="rounded-xl border p-3 bg-white">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">{s.title}</div>
+                    <div className="text-xs opacity-70">
+                      {new Date(s.created_at).toLocaleDateString()} • {s.visibility}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="text-sm rounded-lg border px-3 py-1.5"
+                      onClick={() => gotoSeries(s.id)}
+                    >
+                      Open
+                    </button>
                   </div>
                 </div>
                 {s.description && (
-                  <div className="text-sm opacity-90 mt-1 whitespace-pre-wrap">{s.description}</div>
+                  <div className="text-sm opacity-80 mt-2 whitespace-pre-wrap">{s.description}</div>
                 )}
-              </li>
+              </div>
             ))}
-          </ul>
-        )}
-      </div>
-
-      {/* Selected Series: Entries + Collaboration + Q&A */}
-      {selSeries && (
-        <div className="space-y-3">
-          {/* Collaboration (owner/editor only) */}
-          {isEditor && (
-            <div className="rounded-2xl border p-4 bg-white">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">Collaborators</div>
-                <div className="flex items-center gap-2">
-                  <select
-                    className="border rounded-lg px-2 py-1.5 text-sm"
-                    value={inviteRole}
-                    onChange={(e) => setInviteRole(e.target.value as StudyCollabRole)}
-                    title="Role for the invite link"
-                  >
-                    <option value="viewer">Viewer</option>
-                    <option value="editor">Editor</option>
-                  </select>
-                  <button
-                    className="rounded-lg px-3 py-1.5 border bg-gray-50 text-sm disabled:opacity-50"
-                    onClick={createInviteLink}
-                    disabled={inviting}
-                  >
-                    {inviting ? 'Creating…' : 'Create invite link'}
-                  </button>
-                </div>
-              </div>
-
-              {lastInviteUrl && (
-                <div className="mt-2 text-xs">
-                  Invite URL (copied):{' '}
-                  <span className="font-mono break-all">{lastInviteUrl}</span>
-                </div>
-              )}
-
-              <div className="mt-3 grid gap-2">
-                <div className="text-xs opacity-70">Current collaborators</div>
-                {collabs.length === 0 ? (
-                  <div className="text-sm opacity-70">Just you (owner).</div>
-                ) : (
-                  <ul className="grid gap-1">
-                    {collabs.map((c) => (
-                      <li key={c.user_id} className="text-sm">
-                        {c.display_name || c.email || c.user_id} —{' '}
-                        <span className="opacity-70">{c.role}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              {invites.length > 0 && (
-                <div className="mt-3">
-                  <div className="text-xs opacity-70">Recent invite links</div>
-                  <ul className="grid gap-1 mt-1">
-                    {invites.slice(0, 5).map((i) => (
-                      <li key={i.id} className="text-xs">
-                        {i.role} • {new Date(i.created_at).toLocaleString()} •{' '}
-                        {i.used_at ? `used by ${i.used_by ?? 'unknown'}` : 'unused'}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-2xl border p-4 bg-white">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="text-sm font-semibold">Series</div>
+            <div className="flex items-center gap-2">
+              <button
+                className="text-sm underline"
+                onClick={() => gotoSeries(null)}
+              >
+                ← Back to all series
+              </button>
             </div>
-          )}
+          </div>
 
-          {/* Entries editor */}
-          <div className="rounded-2xl border p-4 bg-white">
-            <div className="text-sm font-semibold">
-              {selSeries.title} — Entries
-            </div>
-            <div className="text-xs opacity-70">
-              Add lessons/parts under this series. (Highlights and Q&A below.)
-            </div>
+          {/* Collaborators (inline) */}
+          <div className="rounded-xl border p-3 bg-white mb-3">
+            <div className="text-sm font-semibold mb-2">Collaborators</div>
 
-            {/* Add Entry */}
-            {isEditor && (
-              <form onSubmit={handleAddEntry} className="mt-3 grid gap-3">
-                <div>
-                  <label className="text-sm font-medium">Entry title</label>
-                  <input
-                    className="w-full border rounded-lg px-3 py-2 text-sm mt-1"
-                    placeholder="e.g., Romans 8: Life in the Spirit"
-                    value={eTitle}
-                    onChange={(e) => setETitle(e.target.value)}
-                    required
-                  />
+            {collabErr && <div className="text-sm text-red-600 mb-2">{collabErr}</div>}
+            {collabLoading ? (
+              <div className="text-sm opacity-70">Loading…</div>
+            ) : (
+              <>
+                <div className="text-xs font-medium opacity-70 mb-1">Current</div>
+                <div className="grid gap-2 mb-3">
+                  {collabs.length === 0 ? (
+                    <div className="text-sm opacity-70">No collaborators yet.</div>
+                  ) : (
+                    collabs.map((c) => (
+                      <div key={c.user_id} className="flex items-center justify-between rounded-lg border p-2">
+                        <div className="text-sm">
+                          {c.display_name || c.email || c.user_id}
+                          <span className="ml-2 text-xs opacity-70">({c.role})</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-                <div>
-                  <label className="text-sm font-medium">Focus scripture (optional)</label>
-                  <input
-                    className="w-full border rounded-lg px-3 py-2 text-sm mt-1"
-                    placeholder='e.g., "Romans 8:1–11"'
-                    value={eRef}
-                    onChange={(e) => setERef(e.target.value)}
-                  />
+
+                {/* Invite by email */}
+                <form onSubmit={onInviteEmail} className="grid gap-2 mb-3">
+                  <div className="text-xs font-medium opacity-70">Invite by email</div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="flex-1 border rounded-lg px-3 py-1.5 text-sm"
+                      placeholder="name@example.com"
+                      value={invEmail}
+                      onChange={(e) => setInvEmail(e.target.value)}
+                    />
+                    <select
+                      className="border rounded-lg px-2 py-1.5 text-sm"
+                      value={invRole}
+                      onChange={(e) => setInvRole(e.target.value as 'viewer' | 'editor')}
+                    >
+                      <option value="viewer">Viewer</option>
+                      <option value="editor">Editor</option>
+                    </select>
+                    <button
+                      type="submit"
+                      className="text-sm rounded-lg border px-3 py-1.5"
+                      disabled={collabWorking || !invEmail.trim()}
+                    >
+                      Invite
+                    </button>
+                  </div>
+                </form>
+
+                {/* Create invite link */}
+                <div className="grid gap-2">
+                  <div className="text-xs font-medium opacity-70">Create invite link</div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="border rounded-lg px-2 py-1.5 text-sm"
+                      value={linkRole}
+                      onChange={(e) => setLinkRole(e.target.value as 'viewer' | 'editor')}
+                    >
+                      <option value="viewer">Viewer</option>
+                      <option value="editor">Editor</option>
+                    </select>
+                    <button
+                      className="text-sm rounded-lg border px-3 py-1.5"
+                      onClick={onCreateLink}
+                      disabled={collabWorking}
+                    >
+                      Create link
+                    </button>
+                    {linkUrl && (
+                      <div className="text-xs opacity-80">
+                        Copied: <span className="ml-1 underline">{linkUrl}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <label className="text-sm font-medium">Content (optional)</label>
-                  <textarea
-                    className="w-full border rounded-lg px-3 py-2 text-sm mt-1"
-                    rows={5}
-                    placeholder="Notes, outline, discussion starters…"
-                    value={eContent}
-                    onChange={(e) => setEContent(e.target.value)}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    className="rounded-lg px-3 py-1.5 border bg-gray-50 text-sm disabled:opacity-50"
-                    disabled={addingEntry || !eTitle.trim()}
-                    type="submit"
-                  >
-                    {addingEntry ? 'Adding…' : 'Add entry'}
-                  </button>
-                </div>
-              </form>
+              </>
             )}
           </div>
 
-          {/* Entries List with Q&A + Highlights */}
-          <div className="rounded-2xl border p-4 bg-white">
-            {loadingEntries ? (
-              <div className="text-sm opacity-70">Loading entries…</div>
-            ) : entries.length === 0 ? (
-              <div className="text-sm opacity-70">No entries yet.</div>
-            ) : (
-              <ul className="grid gap-3">
-                {entries.map((en) => (
-                  <EntryCard
-                    key={en.id}
-                    entry={en}
-                    isEditor={isEditor}
-                    onChange={async (patch) => {
-                      await updateEntry(en.id, patch);
-                      await loadEntries(selSeries.id);
-                    }}
-                    onDelete={async () => {
-                      if (confirm('Delete this entry?')) {
-                        await deleteEntry(en.id);
-                        await loadEntries(selSeries.id);
-                      }
-                    }}
-                  />
-                ))}
-              </ul>
-            )}
+          {loadingEntries && <div className="text-sm opacity-60">Loading…</div>}
+          {entriesErr && <div className="text-sm text-red-600">{entriesErr}</div>}
+
+          {!loadingEntries && !entriesErr && entries.length === 0 && (
+            <div className="text-sm opacity-70">This series has no entries yet.</div>
+          )}
+
+          {/* Entries */}
+          <div className="grid gap-4">
+            {entries.map((e, idx) => {
+              const weekNum = e.position ?? idx + 1;
+              return (
+                <div key={e.id} className="rounded-xl border p-3 bg-white">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">
+                        Week {weekNum}
+                        {e.title ? ` — ${e.title}` : ''}
+                      </div>
+                      {e.focus_ref && (
+                        <div className="text-xs opacity-70 mt-0.5">Focus: {e.focus_ref}</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {e.content && (
+                    <div className="text-sm mt-2 whitespace-pre-wrap">{e.content}</div>
+                  )}
+
+                  {/* Questions */}
+                  {e.questions?.length ? (
+                    <div className="mt-3">
+                      <div className="text-sm font-medium mb-1">Discussion Questions</div>
+                      <div className="grid gap-2">
+                        {e.questions.map((q, qi) => {
+                          const qnum = q.position ?? qi + 1;
+                          const open = !!showAI[q.id];
+                          return (
+                            <div key={q.id} className="rounded-lg border p-2 bg-white">
+                              <div className="text-sm font-medium">
+                                Q{qnum}. {q.prompt ?? ''}
+                              </div>
+                              {q.content && (
+                                <div className="text-sm opacity-80 mt-1 whitespace-pre-wrap">
+                                  {q.content}
+                                </div>
+                              )}
+
+                              {/* AI answer toggle */}
+                              {q.ai_answer ? (
+                                <div className="mt-2">
+                                  <button
+                                    className="text-xs underline"
+                                    onClick={() =>
+                                      setShowAI((prev) => ({ ...prev, [q.id]: !prev[q.id] }))
+                                    }
+                                  >
+                                    {open ? 'Hide AI answer' : 'Show AI answer'}
+                                  </button>
+                                  {open && (
+                                    <div className="mt-1 text-sm bg-gray-50 border rounded p-2 whitespace-pre-wrap">
+                                      {q.ai_answer}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : null}
+
+                              {/* --- My Answer --- */}
+                              <div className="mt-2 rounded-lg border bg-white p-2">
+                                <div className="text-xs font-medium opacity-70 mb-1">My Answer</div>
+                                <textarea
+                                  className="w-full text-sm border rounded-md p-2"
+                                  rows={3}
+                                  placeholder="Write your answer…"
+                                  value={drafts[q.id] ?? ''}
+                                  onChange={(e) => setDraft(q.id, e.target.value)}
+                                />
+                                <div className="mt-2 flex items-center gap-2">
+                                  <button
+                                    className="text-sm rounded-lg border px-3 py-1.5"
+                                    disabled={savingQ === q.id || !(drafts[q.id] ?? '').trim()}
+                                    onClick={() => onSaveAnswer(q.id)}
+                                  >
+                                    {myAnswers[q.id]?.id ? 'Update' : 'Save'}
+                                  </button>
+                                  {myAnswers[q.id]?.id && (
+                                    <button
+                                      className="text-sm rounded-lg border px-3 py-1.5"
+                                      disabled={savingQ === q.id}
+                                      onClick={() => onDeleteAnswer(q.id)}
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                  {savingQ === q.id && (
+                                    <span className="text-xs opacity-70">Saving…</span>
+                                  )}
+                                  {!!(errQ[q.id]?.length) && (
+                                    <span className="text-xs text-red-600">{errQ[q.id]}</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
     </div>
-  );
-}
-
-function EntryCard({
-  entry,
-  isEditor,
-  onChange,
-  onDelete,
-}: {
-  entry: StudyEntry;
-  isEditor: boolean;
-  onChange: (patch: Partial<Pick<StudyEntry, 'title' | 'content' | 'focus_ref' | 'position'>>) => Promise<void>;
-  onDelete: () => Promise<void>;
-}) {
-  const [edit, setEdit] = React.useState(false);
-  const [title, setTitle] = React.useState(entry.title);
-  const [ref, setRef] = React.useState(entry.focus_ref ?? '');
-  const [content, setContent] = React.useState(entry.content ?? '');
-  const [pos, setPos] = React.useState<number>(entry.position);
-  const [saving, setSaving] = React.useState(false);
-
-  // Q&A
-  const [qaOpen, setQaOpen] = React.useState(false);
-  const [qList, setQList] = React.useState<QuestionWithAnswers[]>([]);
-  const [loadingQA, setLoadingQA] = React.useState(false);
-  const [newQ, setNewQ] = React.useState('');
-  const [reply, setReply] = React.useState<{ [qid: string]: string }>({});
-
-  React.useEffect(() => {
-    setTitle(entry.title);
-    setRef(entry.focus_ref ?? '');
-    setContent(entry.content ?? '');
-    setPos(entry.position);
-  }, [entry]);
-
-  async function save() {
-    setSaving(true);
-    try {
-      await onChange({
-        title: title.trim(),
-        focus_ref: ref.trim() || null,
-        content,
-        position: pos,
-      });
-      setEdit(false);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function loadQA() {
-    setLoadingQA(true);
-    try {
-      const rows = await listQuestionsWithAnswers(entry.id);
-      setQList(rows);
-    } finally {
-      setLoadingQA(false);
-    }
-  }
-
-  async function addQ() {
-    if (!newQ.trim()) return;
-    await addQuestion(entry.id, newQ.trim(), 'group');
-    setNewQ('');
-    await loadQA();
-  }
-
-  async function addA(qid: string) {
-    const text = (reply[qid] ?? '').trim();
-    if (!text) return;
-    await addAnswer(qid, text);
-    setReply((m) => ({ ...m, [qid]: '' }));
-    await loadQA();
-  }
-
-  async function highlightSelection() {
-    const sel = window.getSelection?.();
-    const text = sel?.toString() ?? '';
-    if (!text.trim()) {
-      alert('Select some text in this entry first, then click Highlight.');
-      return;
-    }
-    const note = prompt('Optional note for this highlight?') || undefined;
-    await addHighlight({ entry_id: entry.id, text, loc: null, note });
-    alert('Saved to your highlights. (We’ll surface Study highlights on the Library soon.)');
-  }
-
-  return (
-    <li id={`entry-${entry.id}`} className="rounded-xl border p-3">
-      {!edit ? (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-sm font-semibold">
-              {entry.position}. {entry.title}
-            </div>
-            <div className="text-[11px] opacity-60">
-              {new Date(entry.updated_at).toLocaleString()}
-            </div>
-          </div>
-          {entry.focus_ref && <div className="text-xs opacity-80">Focus: {entry.focus_ref}</div>}
-          {entry.content && <div className="text-sm whitespace-pre-wrap">{entry.content}</div>}
-          <div className="flex items-center gap-2 pt-1">
-            {isEditor && (
-              <>
-                <button className="text-sm underline" onClick={() => setEdit(true)}>
-                  Edit
-                </button>
-                <button className="text-sm text-red-600 underline" onClick={onDelete}>
-                  Delete
-                </button>
-              </>
-            )}
-            <button className="text-sm underline" onClick={highlightSelection}>
-              Highlight selection
-            </button>
-            <button
-              className="text-sm underline"
-              onClick={async () => {
-                setQaOpen((o) => !o);
-                if (!qaOpen) await loadQA();
-              }}
-            >
-              {qaOpen ? 'Hide discussion' : 'Open discussion'}
-            </button>
-          </div>
-
-          {qaOpen && (
-            <div className="mt-2 rounded-lg border p-3 bg-gray-50">
-              <div className="text-sm font-semibold mb-2">Discussion</div>
-
-              <div className="flex items-center gap-2 mb-3">
-                <input
-                  className="flex-1 border rounded-lg px-3 py-1.5 text-sm"
-                  placeholder="Ask a question for the group…"
-                  value={newQ}
-                  onChange={(e) => setNewQ(e.target.value)}
-                />
-                <button
-                  className="text-sm rounded-lg border px-3 py-1.5"
-                  onClick={addQ}
-                  disabled={loadingQA || !newQ.trim()}
-                >
-                  Ask
-                </button>
-              </div>
-
-              {loadingQA ? (
-                <div className="text-sm opacity-70">Loading…</div>
-              ) : qList.length === 0 ? (
-                <div className="text-sm opacity-70">No questions yet.</div>
-              ) : (
-                <ul className="grid gap-3">
-                  {qList.map((q) => (
-                    <li key={q.id} className="rounded border p-2 bg-white">
-                      <div className="text-sm">{q.content}</div>
-                      <div className="text-[11px] opacity-60 mt-1">
-                        {new Date(q.created_at).toLocaleString()}
-                      </div>
-
-                      {q.answers.length > 0 && (
-                        <ul className="mt-2 grid gap-1">
-                          {q.answers.map((a) => (
-                            <li key={a.id} className="text-sm pl-3 border-l">
-                              {a.content}
-                              <div className="text-[11px] opacity-60">
-                                {new Date(a.created_at).toLocaleString()}
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-
-                      <div className="flex items-center gap-2 mt-2">
-                        <input
-                          className="flex-1 border rounded-lg px-3 py-1.5 text-sm"
-                          placeholder="Reply…"
-                          value={reply[q.id] ?? ''}
-                          onChange={(e) =>
-                            setReply((m) => ({ ...m, [q.id]: e.target.value }))
-                          }
-                        />
-                        <button
-                          className="text-sm rounded-lg border px-3 py-1.5"
-                          onClick={() => addA(q.id)}
-                        >
-                          Send
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="grid gap-2">
-          <div className="grid grid-cols-[60px_1fr] gap-2 items-center">
-            <label className="text-sm opacity-70">Order</label>
-            <input
-              type="number"
-              className="border rounded-lg px-2 py-1.5 text-sm w-24"
-              value={pos}
-              onChange={(e) => setPos(parseInt(e.target.value || '0', 10))}
-            />
-          </div>
-          <div>
-            <label className="text-sm opacity-70">Title</label>
-            <input
-              className="w-full border rounded-lg px-3 py-2 text-sm mt-1"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-sm opacity-70">Focus scripture</label>
-            <input
-              className="w-full border rounded-lg px-3 py-2 text-sm mt-1"
-              value={ref}
-              onChange={(e) => setRef(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-sm opacity-70">Content</label>
-            <textarea
-              className="w-full border rounded-lg px-3 py-2 text-sm mt-1"
-              rows={5}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              className="rounded-lg px-3 py-1.5 border bg-gray-50 text-sm disabled:opacity-50"
-              onClick={save}
-              disabled={saving}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-            <button
-              className="text-sm underline"
-              onClick={() => setEdit(false)}
-              disabled={saving}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </li>
   );
 }
