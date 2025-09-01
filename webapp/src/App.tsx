@@ -10,13 +10,28 @@ import GroupSubNav from './components/GroupSubNav';
 import LibraryPage from './pages/Library/LibraryPage';
 import AcceptStudyInvite from './pages/AcceptStudyInvite';
 import ApprovalsPage from './pages/Admin/ApprovalsPage';
-import RequestGroupPage from './pages/Group/RequestGroupPage'; // 👈 your full form page
+import RequestGroupPage from './pages/Group/RequestGroupPage'; // form page
 import LeaderInbox from './components/LeaderInbox';
 
 import GroupSelector from './components/GroupSelector';
 import AuthBar from './components/AuthBar';
 import { ToastProvider } from './components/ToastProvider';
 import FiresidePreview from './pages/FiresidePreview';
+import LibraryPageF180 from './pages/Library/LibraryPageF180';
+import VersesTabF180 from './pages/Group/VersesTabF180';
+import DevotionsTabF180 from './pages/Group/DevotionsTabF180';
+import { renderF180PreviewRoute } from "./preview/F180PreviewRoutes";
+
+// F180 preview shell + logo assets
+import F180Page from './components/F180Page';
+import logoWordmarkUrl from './assets/fireside180-wordmark.svg';
+import logoMarkUrl from './assets/fireside180-logo-mark.svg';
+
+// ⬇️ NEW: F180 toast provider for preview routes
+import { F180ToastProvider } from './components/f180/F180ToastProvider';
+// near the other F180 imports
+import StudyTabF180 from './pages/Group/StudyTabF180';
+
 
 /** Parse the current hash into path + segments + query. */
 function useHashRoute() {
@@ -73,7 +88,6 @@ export default function App() {
         <div className="max-w-5xl mx-auto p-3 flex items-center justify-between gap-3">
           <div className="text-sm font-semibold">Fireside</div>
 
-
           <div className="flex items-center gap-3">
             {/* Groups → default to current group's Verses, else welcome */}
             <button
@@ -96,6 +110,9 @@ export default function App() {
 
             <button className="text-sm underline" onClick={() => goto('/library')}>
               Library
+            </button>
+            <button className="text-sm underline" onClick={() => goto('/library-style')}>
+              Library (Preview)
             </button>
 
             {/* Inbox → dedicated view */}
@@ -140,9 +157,118 @@ export default function App() {
     );
   }
 
-// Preview page (kept outside your normal shell to avoid double header)
-if (segments[0] === 'style') {
-  return <FiresidePreview />;
+  // Preview page (kept outside your normal shell to avoid double header)
+  if (segments[0] === 'style') {
+    return <FiresidePreview />;
+  }
+  const preview = renderF180PreviewRoute(segments);
+  if (preview) return preview;
+
+  // F180-styled preview of your real Library page (safe, isolated)
+  if (segments[0] === 'library-style') {
+    return (
+      <F180ToastProvider>
+        <F180Page
+          nav={[
+            { label: 'Groups', href: '/#/groups' },
+            { label: 'Verses', href: '/#/verses' },
+            { label: 'Devotions', href: '/#/devotions' },
+            { label: 'Journal', href: '/#/journal' },
+            { label: 'Inbox', href: '/#/inbox' },
+            { label: 'Prayers', href: '/#/prayers' },
+            { label: 'Library', href: '/#/library' },
+          ]}
+          logoMarkSrc={logoMarkUrl}
+          logoWordmarkSrc={logoWordmarkUrl}
+        >
+          <div className="space-y-6">
+            <h1 className="text-2xl font-semibold tracking-tight">Library (styled preview)</h1>
+            <LibraryPageF180 />
+          </div>
+        </F180Page>
+      </F180ToastProvider>
+    );
+  }
+
+  // F180-styled preview of the group Verses page
+  if (segments[0] === 'group' && segments[1] && segments[2] === 'verses-style') {
+    const gid = segments[1];
+    return (
+      <F180ToastProvider>
+        <F180Page
+          nav={[
+            { label: 'Groups', href: '/#/groups' },
+            { label: 'Verses', href: `/#/group/${gid}/verses` },
+            { label: 'Devotions', href: `/#/group/${gid}/devotions` },
+            { label: 'Journal', href: `/#/group/${gid}/journal` },
+            { label: 'Inbox', href: `/#/group/${gid}/inbox` },
+            { label: 'Prayers', href: `/#/group/${gid}/prayers` },
+            { label: 'Library', href: '/#/library' },
+          ]}
+          logoMarkSrc={logoMarkUrl}
+          logoWordmarkSrc={logoWordmarkUrl}
+        >
+          <div className="space-y-6">
+            <h1 className="text-2xl font-semibold tracking-tight">Verses (styled preview)</h1>
+            <VersesTabF180 groupId={gid} />
+          </div>
+        </F180Page>
+      </F180ToastProvider>
+    );
+  }
+
+  // ⬇️ F180-styled preview of the group Devotions page
+  if (segments[0] === 'group' && segments[1] && segments[2] === 'devotions-f180') {
+    const gid = segments[1];
+    return (
+      <F180ToastProvider>
+        <F180Page
+          nav={[
+            { label: 'Groups', href: '/#/groups' },
+            { label: 'Verses', href: `/#/group/${gid}/verses` },
+            { label: 'Devotions', href: `/#/group/${gid}/devotions` }, // live route
+            { label: 'Journal', href: `/#/group/${gid}/journal` },
+            { label: 'Inbox', href: `/#/group/${gid}/inbox` },
+            { label: 'Prayers', href: `/#/group/${gid}/prayers` },
+            { label: 'Library', href: '/#/library' },
+          ]}
+          logoMarkSrc={logoMarkUrl}
+          logoWordmarkSrc={logoWordmarkUrl}
+        >
+          <div className="space-y-6">
+            <h1 className="text-2xl font-semibold tracking-tight">Devotions (styled preview)</h1>
+            <DevotionsTabF180 groupId={gid} />
+          </div>
+        </F180Page>
+      </F180ToastProvider>
+    );
+  }
+// ⬇️ F180-styled preview of the group Study page
+if (segments[0] === 'group' && segments[1] && segments[2] === 'study-f180') {
+  const gid = segments[1];
+  return (
+    <F180ToastProvider>
+      <F180Page
+        nav={[
+          { label: 'Groups', href: '/#/groups' },
+          { label: 'Verses', href: `/#/group/${gid}/verses` },      // live links kept intact
+          { label: 'Devotions', href: `/#/group/${gid}/devotions` },// live
+          { label: 'Study', href: `/#/group/${gid}/study` },        // live
+          { label: 'Journal', href: `/#/group/${gid}/journal` },
+          { label: 'Inbox', href: `/#/group/${gid}/inbox` },
+          { label: 'Prayers', href: `/#/group/${gid}/prayers` },
+          { label: 'Library', href: '/#/library' },
+        ]}
+        logoMarkSrc={logoMarkUrl}
+        logoWordmarkSrc={logoWordmarkUrl}
+      >
+        <div className="space-y-6">
+          <h1 className="text-2xl font-semibold tracking-tight">Study (styled preview)</h1>
+          <StudyTabF180 groupId={gid} />
+        </div>
+      </F180Page>
+    </F180ToastProvider>
+  );
 }
 
   // Standalone pages
@@ -178,7 +304,7 @@ if (segments[0] === 'style') {
     );
   }
 
-  // NEW: request-group dedicated page (form only, no welcome block)
+  // request-group dedicated page (form only, no welcome block)
   if (segments[0] === 'request-group') {
     return (
       <ToastProvider>
