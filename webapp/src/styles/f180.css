@@ -1,0 +1,38 @@
+@layer base {
+  /* Scoped theme — only applies inside a .f180 wrapper */
+  .f180 {
+    --background: 0 0% 5.5%;         /* #0E0E0E */
+    --foreground: 0 0% 90.2%;        /* #E6E6E6 */
+
+    --card: 0 0% 8.6%;               /* #161616 */
+    --card-foreground: 0 0% 90.2%;
+
+    --popover: 0 0% 8.6%;
+    --popover-foreground: 0 0% 90.2%;
+
+    --primary: 355.5 82.9% 41.4%;    /* #C1121F */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 9%;
+    --secondary-foreground: 0 0% 90.2%;
+
+    --muted: 0 0% 9%;
+    --muted-foreground: 0 0% 65.1%;  /* #A6A6A6 */
+
+    --accent: 16 100% 60.4%;         /* #FF6B35 */
+    --accent-foreground: 0 0% 0%;
+
+    --destructive: 346.8 77.2% 49.8%;/* #E11D48 */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 16.5%;            /* #2A2A2A */
+    --input: 0 0% 16.5%;
+    --ring: 16 100% 60.4%;           /* ember ring */
+
+    --radius: 1rem;                  /* rounded-2xl */
+  }
+
+  /* Optional polish inside the scoped area */
+  .f180 h1, .f180 h2, .f180 h3 { @apply tracking-tight font-semibold; }
+  .f180 :focus-visible { box-shadow: 0 0 0 4px hsl(var(--accent) / 0.40); outline: none; }
+}

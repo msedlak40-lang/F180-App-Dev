@@ -108,7 +108,7 @@ export async function deleteSeries(seriesId: string): Promise<void> {
 export async function listEntries(seriesId: string): Promise<DevEntry[]> {
   const { data, error } = await supabase
     .from('devotion_entries')
-    .select('id, series_id, day_index, title, body_md, status, scheduled_date, created_at')
+    .select('id, series_id, day_index, title, body_md, status, scheduled_date, author_id, created_at')
     .eq('series_id', seriesId)
     .order('day_index', { ascending: true });
 
@@ -168,38 +168,99 @@ export async function deleteEntry(entryId: string): Promise<void> {
 
 /* ========= Multi-day generator bulk insert ========= */
 
+//export async function bulkAddEntries(
+  //seriesId: string,
+  //startDate: string, // YYYY-MM-DD
+ // drafts: SeriesDraftItem[],
+ // cadenceDays = 1
+//): Promise<number> {
+ // const start = new Date(`${startDate}T00:00:00`);
+ // if (isNaN(start.getTime())) throw new Error('Invalid start date');
+ // const cadence = Math.max(1, cadenceDays);
+
+ // const rows = drafts.map((d, idx) => {
+  //  const dt = new Date(start);
+  //  dt.setDate(dt.getDate() + idx * cadence);
+   // const y = dt.getFullYear();
+   // const m = String(dt.getMonth() + 1).padStart(2, '0');
+   // const day = String(dt.getDate()).padStart(2, '0');
+   // const sched = `${y}-${m}-${day}`;
+   // const row: Record<string, any> = {
+   //   series_id: seriesId,
+   //   day_index: idx + 1,
+   //   title: d.title,
+   //   body_md: d.body_md,
+   //   status: 'scheduled',
+  //    scheduled_date: sched,
+ //   };
+ //  if (Array.isArray(d.scriptures) && d.scriptures.length) row.scriptures = d.scriptures;
+ //   return row;
+ // });
+
+  //let { data, error } = await supabase.from('devotion_entries').insert(rows).select('id');
+ // if (error) {
+   // if (/column .*scriptures/i.test(error.message)) {
+  //    rows.forEach((r) => delete r.scriptures);
+  //    const retry = await supabase.from('devotion_entries').insert(rows).select('id');
+  //    if (retry.error) throw new Error(retry.error.message);
+  //    return retry.data?.length ?? 0;
+  //  }
+   // throw new Error(error.message);
+ // }
+ // return data?.length ?? 0;
+//}
+
 export async function bulkAddEntries(
   seriesId: string,
-  startDate: string, // YYYY-MM-DD
+  startDate: string | null, // allow null
   drafts: SeriesDraftItem[],
-  cadenceDays = 1
+  cadenceIn: number | 'daily' | 'weekly' = 1
 ): Promise<number> {
-  const start = new Date(`${startDate}T00:00:00`);
-  if (isNaN(start.getTime())) throw new Error('Invalid start date');
-  const cadence = Math.max(1, cadenceDays);
+  // get current user id for author_id
+  const { data: userData, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw new Error(authErr.message);
+  const me = userData?.user?.id;
+  if (!me) throw new Error('You must be signed in to add entries');
+
+  // normalize cadence to days
+  const cadenceDays =
+    typeof cadenceIn === 'number'
+      ? Math.max(1, cadenceIn)
+      : cadenceIn === 'weekly'
+      ? 7
+      : 1; // 'daily' -> 1
+
+  // helper: safe YYYY-MM-DD or null
+  const toSched = (s: string | null, offsetDays: number): string | null => {
+    if (!s) return null;
+    const d = new Date(`${s}T00:00:00Z`); // force UTC midnight
+    if (isNaN(d.getTime())) return null;
+    d.setUTCDate(d.getUTCDate() + offsetDays);
+    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  };
 
   const rows = drafts.map((d, idx) => {
-    const dt = new Date(start);
-    dt.setDate(dt.getDate() + idx * cadence);
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, '0');
-    const day = String(dt.getDate()).padStart(2, '0');
-    const sched = `${y}-${m}-${day}`;
+    const scheduled = toSched(startDate, idx * cadenceDays);
     const row: Record<string, any> = {
       series_id: seriesId,
-      day_index: idx + 1,
+      author_id: me,                      // ⬅️ required by your NOT NULL constraint
+      day_index: d.day_index ?? idx + 1,
       title: d.title,
-      body_md: d.body_md,
-      status: 'scheduled',
-      scheduled_date: sched,
+      body_md: d.body_md ?? '',
+      status: scheduled ? 'scheduled' : 'draft',
+      scheduled_date: scheduled,          // may be null
     };
-    if (Array.isArray(d.scriptures) && d.scriptures.length) row.scriptures = d.scriptures;
+    // tolerate optional scriptures field if present in your draft shape
+    if (Array.isArray((d as any).scriptures) && (d as any).scriptures.length) {
+      row.scriptures = (d as any).scriptures;
+    }
     return row;
   });
 
   let { data, error } = await supabase.from('devotion_entries').insert(rows).select('id');
   if (error) {
-    if (/column .*scriptures/i.test(error.message)) {
+    // if your table doesn't have 'scriptures', retry without it
+    if (/column .+scriptures/i.test(error.message)) {
       rows.forEach((r) => delete r.scriptures);
       const retry = await supabase.from('devotion_entries').insert(rows).select('id');
       if (retry.error) throw new Error(retry.error.message);
@@ -209,6 +270,8 @@ export async function bulkAddEntries(
   }
   return data?.length ?? 0;
 }
+
+
 
 /* ===================== Collaborators ===================== */
 
@@ -442,4 +505,66 @@ export async function createEntryHighlight(
 export async function deleteEntryHighlight(highlightId: string): Promise<void> {
   const { error } = await supabase.rpc('dev_delete_highlight', { p_highlight_id: highlightId });
   if (error) throw new Error(error.message);
+}
+
+// --- Devotion entry progress (per-user read/archive state) ---
+
+export type DevEntryProgress = {
+  entry_id: string;
+  series_id: string;
+  read_at: string | null;
+  archived_at: string | null;
+};
+
+/** Map of entry_id -> { read_at, archived_at } for the current user */
+export async function getMyProgressForSeries(seriesId: string): Promise<Record<string, DevEntryProgress>> {
+  const { data, error } = await supabase
+    .from('devotion_entry_progress')
+    .select('entry_id, series_id, read_at, archived_at')
+    .eq('series_id', seriesId);
+
+  if (error) throw new Error(error.message);
+  const map: Record<string, DevEntryProgress> = {};
+  (data || []).forEach((row) => (map[row.entry_id] = row));
+  return map;
+}
+
+/** Mark an entry as read for the current user */
+export async function markEntryRead(seriesId: string, entryId: string): Promise<void> {
+  // Try update first (works if a row already exists for this user/entry)
+  let { error } = await supabase
+    .from('devotion_entry_progress')
+    .update({ read_at: new Date().toISOString() })
+    .eq('entry_id', entryId);
+
+  // If no row existed (or RLS blocked update), insert a new one; trigger sets user_id.
+  const { error: insErr } = await supabase
+    .from('devotion_entry_progress')
+    .insert([{ series_id: seriesId, entry_id: entryId, read_at: new Date().toISOString() }]);
+
+  if (insErr && !/duplicate key value|already exists|unique constraint/i.test(insErr.message)) {
+    throw new Error(insErr.message);
+  }
+}
+
+/** Archive or unarchive an entry for the current user */
+export async function toggleArchiveEntry(seriesId: string, entryId: string, archived: boolean): Promise<void> {
+  const ts = archived ? new Date().toISOString() : null;
+
+  // Try update first
+  let { error } = await supabase
+    .from('devotion_entry_progress')
+    .update({ archived_at: ts })
+    .eq('entry_id', entryId);
+
+  if (!error) return;
+
+  // If row missing, insert baseline with archived state; trigger sets user_id
+  const { error: insErr } = await supabase
+    .from('devotion_entry_progress')
+    .insert([{ series_id: seriesId, entry_id: entryId, read_at: archived ? new Date().toISOString() : null, archived_at: ts }]);
+
+  if (insErr && !/duplicate key value|already exists|unique constraint/i.test(insErr.message)) {
+    throw new Error(insErr.message);
+  }
 }
