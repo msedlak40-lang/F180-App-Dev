@@ -6,6 +6,7 @@ import { useF180Toast } from "../../components/f180/F180ToastProvider";
 
 export default function VersesTabF180({ groupId }: { groupId: string }) {
   const [refreshTick, setRefreshTick] = React.useState(0);
+
   return (
     <div className="mx-auto max-w-6xl px-0 lg:px-2">
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -49,6 +50,7 @@ function QuickAddCard({
   const [ref, setRef] = React.useState("");
   const [version, setVersion] = React.useState("ESV");
   const [busy, setBusy] = React.useState(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -69,13 +71,57 @@ function QuickAddCard({
     }
   }
 
+  // Prefill from Home's "Add to Verses" (queued in sessionStorage)
   React.useEffect(() => {
-    // Remember last version, autofocus
-    try { const saved = localStorage.getItem("f180:last-version"); if (saved) setVersion(saved); } catch {}
-    const el = document.getElementById("f180-quick-add-input") as HTMLInputElement | null;
-    el?.focus();
+    try {
+      const raw = sessionStorage.getItem("f180.verses.toAdd");
+      if (!raw) return;
+      const data = JSON.parse(raw) as {
+        group_id: string;
+        reference: string;
+        text?: string;
+        testament?: "OT" | "NT";
+        ts?: number;
+      };
+      // Only prefill if it matches this group
+      if (data?.group_id && data.group_id !== groupId) return;
+
+      // Clear the queue so refresh doesn't reapply
+      sessionStorage.removeItem("f180.verses.toAdd");
+
+      // Prefill and focus the quick-add box
+      const reference = (data?.reference || "").replace(/\s+/g, " ").trim();
+      if (!reference) return;
+
+      setRef(reference);
+      // Focus after state applies
+      setTimeout(() => {
+        const el = inputRef.current;
+        if (el) {
+          el.focus();
+          try {
+            el.setSelectionRange(reference.length, reference.length);
+          } catch {}
+        }
+      }, 0);
+    } catch {
+      /* ignore */
+    }
+  }, [groupId]);
+
+  // Remember last version & autofocus on first mount
+  React.useEffect(() => {
+    try {
+      const saved = localStorage.getItem("f180:last-version");
+      if (saved) setVersion(saved);
+    } catch {}
+    inputRef.current?.focus();
   }, []);
-  React.useEffect(() => { try { localStorage.setItem("f180:last-version", version); } catch {} }, [version]);
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("f180:last-version", version);
+    } catch {}
+  }, [version]);
 
   return (
     <div className="rounded-2xl border border-[hsl(var(--border))] bg-[hsl(var(--background))] p-4 shadow-sm">
@@ -87,6 +133,7 @@ function QuickAddCard({
       <form onSubmit={onSubmit} className="space-y-2">
         <input
           id="f180-quick-add-input"
+          ref={inputRef}
           value={ref}
           onChange={(e) => setRef(e.target.value)}
           placeholder="e.g., Romans 5:8"
@@ -100,7 +147,9 @@ function QuickAddCard({
             title="Bible version (optional)"
           >
             {["ESV", "NIV", "NKJV", "NLT", "KJV"].map((v) => (
-              <option key={v} value={v}>{v}</option>
+              <option key={v} value={v}>
+                {v}
+              </option>
             ))}
           </select>
           <button

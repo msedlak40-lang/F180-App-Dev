@@ -21,6 +21,7 @@ import LibraryPageF180 from './pages/Library/LibraryPageF180';
 import VersesTabF180 from './pages/Group/VersesTabF180';
 import DevotionsTabF180 from './pages/Group/DevotionsTabF180';
 import { renderF180PreviewRoute } from "./preview/F180PreviewRoutes";
+import JournalTabF180 from "./pages/Group/JournalTabF180";
 
 // F180 preview shell + logo assets
 import F180Page from './components/F180Page';
@@ -216,6 +217,33 @@ export default function App() {
       </F180ToastProvider>
     );
   }
+
+// ⬇️ F180-styled preview of the group Journal page
+if (segments[0] === 'group' && segments[1] && segments[2] === 'journal-f180') {
+  const gid = segments[1];
+  return (
+    <F180ToastProvider>
+      <F180Page
+        nav={[
+          { label: 'Groups',   href: '/#/groups' },
+          { label: 'Verses',   href: `/#/group/${gid}/verses` },
+          { label: 'Devotions',href: `/#/group/${gid}/devotions` },
+          { label: 'Journal',  href: `/#/group/${gid}/journal` }, // live route
+          { label: 'Inbox',    href: `/#/group/${gid}/inbox` },
+          { label: 'Prayers',  href: `/#/group/${gid}/prayers` },
+          { label: 'Library',  href: '/#/library' },
+        ]}
+        logoMarkSrc={logoMarkUrl}
+        logoWordmarkSrc={logoWordmarkUrl}
+      >
+        <div className="space-y-6">
+          <h1 className="text-2xl font-semibold tracking-tight">Journal (styled preview)</h1>
+          <JournalTabF180 groupId={gid} />
+        </div>
+      </F180Page>
+    </F180ToastProvider>
+  );
+}
 
   // ⬇️ F180-styled preview of the group Devotions page
   if (segments[0] === 'group' && segments[1] && segments[2] === 'devotions-f180') {

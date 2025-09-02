@@ -36,3 +36,69 @@
   .f180 h1, .f180 h2, .f180 h3 { @apply tracking-tight font-semibold; }
   .f180 :focus-visible { box-shadow: 0 0 0 4px hsl(var(--accent) / 0.40); outline: none; }
 }
+/* Dark-theme native controls inside the F180 shell */
+.f180 select,
+.f180 input[type="time"],
+.f180 input[type="date"],
+.f180 input[type="datetime-local"] {
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--input));
+  color-scheme: dark; /* hint browsers/OS to use dark popups */
+}
+
+/* Make the time/date picker icon white (Chromium/WebKit) */
+.f180 input[type="time"]::-webkit-calendar-picker-indicator,
+.f180 input[type="date"]::-webkit-calendar-picker-indicator,
+.f180 input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) opacity(0.85);
+}
+
+/* Optional: ensure focused controls stay on-theme */
+.f180 select:focus,
+.f180 input[type="time"]:focus,
+.f180 input[type="date"]:focus,
+.f180 input[type="datetime-local"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+/* Make native selects and their popup lean dark */
+.f180 select {
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  border: 1px solid hsl(var(--input));
+  color-scheme: dark; /* nudges OS/UA dropdown to dark where supported */
+}
+.f180 select option {
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+}
+
+/* Ensure Radix/shadcn portals inherit the F180 tokens */
+:root:has(.f180) {
+  /* expose your theme vars globally ONLY when an .f180 page is mounted */
+  color-scheme: dark;
+  --background: 0 0% 5.5%;
+  --foreground: 0 0% 90.2%;
+  --card: 0 0% 8.6%;
+  --card-foreground: 0 0% 90.2%;
+  --popover: 0 0% 8.6%;
+  --popover-foreground: 0 0% 90.2%;
+  --primary: 355.5 82.9% 41.4%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 9%;
+  --secondary-foreground: 0 0% 90.2%;
+  --muted: 0 0% 12%;
+  --muted-foreground: 0 0% 65%;
+  --accent: 10.9 84.7% 50%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 18%;
+  --input: 0 0% 18%;
+  --ring: 355.5 82.9% 41.4%;
+  --radius: 1rem;
+}
+/* Radix portal root (used by shadcn/ui Select, Dropdown, etc.) */
+[data-radix-portal] { color-scheme: dark; }

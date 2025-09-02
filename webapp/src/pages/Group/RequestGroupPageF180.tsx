@@ -1,216 +1,331 @@
 import React from "react";
-import { requestGroup } from "../../services/groups";
+import { supabase } from "../../lib/supabaseClient";
 
-const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-const TZ_CHOICES = [
+type FormState = {
+  name: string;
+  location: string;            // short label (e.g., "Members House")
+  metting_location: string;    // (sic) full address column name in your DB
+  meeting_day: string;         // e.g., "Wednesday"
+  meeting_time: string;        // "HH:MM"
+  meeting_timezone: string;    // IANA tz
+  notes: string;
+};
+
+const DAYS = [
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+];
+
+const TIMEZONES = [
   "America/Chicago",
   "America/New_York",
   "America/Denver",
   "America/Los_Angeles",
+  "America/Phoenix",
+  "America/Anchorage",
+  "Pacific/Honolulu",
   "UTC",
 ];
 
-type Payload = {
-  name: string;
-  location?: string | null;
-  day?: string | null;
-  time?: string | null;     // "HH:MM"
-  tz?: string | null;       // IANA TZ
-  notes?: string | null;
-};
-
 export default function RequestGroupPageF180() {
-  const [name, setName] = React.useState("");
-  const [location, setLocation] = React.useState("");
-  const [day, setDay] = React.useState<string>("");
-  const [time, setTime] = React.useState<string>(""); // "HH:MM"
-  const [tz, setTz] = React.useState<string>("America/Chicago");
-  const [notes, setNotes] = React.useState("");
+  const [state, setState] = React.useState<FormState>({
+    name: "",
+    location: "",
+    metting_location: "",
+    meeting_day: "",
+    meeting_time: "",
+    meeting_timezone: "America/Chicago",
+    notes: "",
+  });
 
-  const [submitting, setSubmitting] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
 
-  const [isDemo, setIsDemo] = React.useState(false);
+  function onChange<K extends keyof FormState>(key: K, value: FormState[K]) {
+    setState((s) => ({ ...s, [key]: value }));
+  }
 
-  // enable demo via hash query: /#/request-group-f180?demo=1
-  React.useEffect(() => {
-    try {
-      const hash =
-        typeof window !== "undefined" && window.location && typeof window.location.hash === "string"
-          ? window.location.hash
-          : "";
-      const qIndex = hash.indexOf("?");
-      const qs = qIndex >= 0 ? hash.slice(qIndex + 1) : "";
-      const p = new URLSearchParams(qs);
-      const demo = p.get("demo");
-      if (demo === "1" || demo === "true") setIsDemo(true);
-    } catch { /* ignore */ }
-  }, []);
+  function validate(): string | null {
+    if (!state.name.trim()) return "Please enter a group name.";
+    if (!state.meeting_day) return "Please choose a meeting day.";
+    if (!state.meeting_time) return "Please choose a meeting time.";
+    if (!state.meeting_timezone) return "Please choose a time zone.";
+    return null;
+  }
 
-  const disabled = submitting || !name.trim() || (!!time && !/^\d{2}:\d{2}$/.test(time));
-
-  async function onSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
-    setError(null);
-    setSubmitting(true);
+    setErr(null);
+
+    const v = validate();
+    if (v) {
+      setErr(v);
+      return;
+    }
+
+    setBusy(true);
     try {
-      const payload: Payload = {
-        name: name.trim(),
-        location: location.trim() || null,
-        day: day || null,
-        time: time || null,
-        tz: tz || null,
-        notes: notes.trim() || null,
+      const { data: auth } = await supabase.auth.getUser();
+      const user_id = auth.user?.id ?? null;
+
+      // Payload normalized to your groups-style column names
+      const payload = {
+        requester_id: user_id,          // optional, if your intake table stores requester
+        owner_id: user_id,              // optional alias
+        name: state.name.trim(),
+        location: state.location.trim() || null,             // short label (e.g., "Members House")
+        metting_location: state.metting_location.trim() || null, // (sic) full address
+        meeting_day: state.meeting_day,
+        meeting_time: state.meeting_time,
+        meeting_timezone: state.meeting_timezone,
+        notes: state.notes.trim() || null,
+        created_at: new Date().toISOString(),
+        status: "pending",              // if intake table has a status column
       };
 
-      if (isDemo) {
-        await new Promise((r) => setTimeout(r, 600));
-        setMsg("✅ Demo: your request would be submitted. (Not saved)");
-      } else {
-        await requestGroup(payload as any);
-        setMsg("✅ Request submitted and pending approval.");
-        // Clear inputs (keep tz preference)
-        setName("");
-        setLocation("");
-        setDay("");
-        setTime("");
-        setNotes("");
+      // 1) Prefer an RPC if you have one
+      const rpcTry = await tryRpc([
+        ["request_group", { p_name: payload.name, p_location: payload.location, p_address: payload.metting_location, p_day: payload.meeting_day, p_time: payload.meeting_time, p_tz: payload.meeting_timezone, p_notes: payload.notes }],
+        // Add more RPC aliases here if needed
+      ]);
+      if (rpcTry.ok) {
+        setMsg("Request sent. An admin will review and approve.");
+        resetForm();
+        return;
       }
+
+      // 2) Fallback to a common intake table name
+      const insertTry = await tryInsert([
+        ["group_requests", payload],
+        ["groups_pending", payload],
+      ]);
+      if (insertTry.ok) {
+        setMsg("Request sent. An admin will review and approve.");
+        resetForm();
+        return;
+      }
+
+      // If neither worked, surface a helpful error
+      throw new Error(
+        "Could not submit request. Please verify the intake RPC/table name (expected one of: rpc: request_group; table: group_requests or groups_pending)."
+      );
     } catch (e: any) {
-      setError(e?.message ?? "Failed to submit request");
+      setErr(e?.message ?? "Something went wrong while sending your request.");
     } finally {
-      setSubmitting(false);
+      setBusy(false);
     }
   }
 
+  function resetForm() {
+    setState({
+      name: "",
+      location: "",
+      metting_location: "",
+      meeting_day: "",
+      meeting_time: "",
+      meeting_timezone: "America/Chicago",
+      notes: "",
+    });
+  }
+
+  // Helpers that try multiple backends gracefully
+  async function tryRpc(
+    candidates: ReadonlyArray<readonly [string, Record<string, any>]>
+  ) {
+    for (const [name, args] of candidates) {
+      try {
+        const { error } = await supabase.rpc(name, args as any);
+        if (!error) return { ok: true as const, name };
+      } catch {
+        // continue
+      }
+    }
+    return { ok: false as const };
+  }
+
+  async function tryInsert(
+    candidates: ReadonlyArray<readonly [string, Record<string, any>]>
+  ) {
+    for (const [table, row] of candidates) {
+      try {
+        const { error } = await supabase.from(table).insert(row);
+        if (!error) return { ok: true as const, table };
+      } catch {
+        // continue
+      }
+    }
+    return { ok: false as const };
+  }
+
   return (
-    <div className="f180 space-y-5">
-      {/* Header */}
-      <div className="rounded-[var(--radius)] border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 md:p-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <div className="text-lg font-semibold tracking-tight text-[hsl(var(--card-foreground))]">
-            Request a Fireside Group
-          </div>
-          <div className="text-xs text-white/60">
-            Your request will be marked <span className="text-white/80 font-medium">Pending</span> for an admin to approve.
-          </div>
+    <div className="f180">
+      {/* Scoped dark theme for native controls (select/date/time) */}
+      <style>{`
+        .f180 select,
+        .f180 input[type="time"],
+        .f180 input[type="date"],
+        .f180 input[type="datetime-local"] {
+          background-color: hsl(var(--popover));
+          color: hsl(var(--popover-foreground));
+          border: 1px solid hsl(var(--input));
+          color-scheme: dark; /* makes dropdown popups dark in modern browsers */
+        }
+        .f180 input[type="time"]::-webkit-calendar-picker-indicator,
+        .f180 input[type="date"]::-webkit-calendar-picker-indicator,
+        .f180 input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+          filter: invert(1) opacity(0.92); /* white clock/calendar icon */
+        }
+        .f180 select:focus,
+        .f180 input[type="time"]:focus,
+        .f180 input[type="date"]:focus,
+        .f180 input[type="datetime-local"]:focus {
+          outline: none;
+          box-shadow: 0 0 0 2px hsl(var(--ring));
+        }
+      `}</style>
+
+      <div className="rounded-[var(--radius)] border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 md:p-5">
+        <div className="text-lg font-semibold tracking-tight text-[hsl(var(--card-foreground))]">
+          Request a New Fireside Group
         </div>
-        <div className="flex items-center gap-2">
-          <label className="inline-flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+        <p className="mt-1 text-sm text-white/70">
+          Submit your group details. An admin will review and approve.
+        </p>
+
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+          {/* Group name */}
+          <div>
+            <label className="block text-xs text-white/70 mb-1">Group name</label>
             <input
-              type="checkbox"
-              checked={isDemo}
-              onChange={(e) => setIsDemo(e.target.checked)}
+              type="text"
+              value={state.name}
+              onChange={(e) => onChange("name", e.target.value)}
+              className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-3 text-sm focus:outline-none"
+              placeholder="e.g., North Austin Fireside"
+              required
             />
-            Demo mode (don’t save)
-          </label>
-        </div>
+          </div>
+
+          {/* Location label + Address */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-white/70 mb-1">
+                Location label (short)
+              </label>
+              <input
+                type="text"
+                value={state.location}
+                onChange={(e) => onChange("location", e.target.value)}
+                className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-3 text-sm focus:outline-none"
+                placeholder='e.g., "Members House"'
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-white/70 mb-1">
+                Address (stored in <code className="font-mono">metting_location</code>)
+              </label>
+              <input
+                type="text"
+                value={state.metting_location}
+                onChange={(e) => onChange("metting_location", e.target.value)}
+                className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-3 text-sm focus:outline-none"
+                placeholder="Street, City, State"
+              />
+            </div>
+          </div>
+
+          {/* Day / Time / Time zone */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-white/70 mb-1">Meeting day</label>
+              <select
+                value={state.meeting_day}
+                onChange={(e) => onChange("meeting_day", e.target.value)}
+                className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-3 text-sm focus:outline-none"
+                required
+              >
+                <option value="">Select day</option>
+                {DAYS.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs text-white/70 mb-1">Meeting time</label>
+              <input
+                type="time"
+                value={state.meeting_time}
+                onChange={(e) => onChange("meeting_time", e.target.value)}
+                className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-3 text-sm focus:outline-none"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-white/70 mb-1">Time zone</label>
+              <select
+                value={state.meeting_timezone}
+                onChange={(e) => onChange("meeting_timezone", e.target.value)}
+                className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-3 text-sm focus:outline-none"
+                required
+              >
+                {TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz}>
+                    {tz}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-xs text-white/70 mb-1">Notes (optional)</label>
+            <textarea
+              value={state.notes}
+              onChange={(e) => onChange("notes", e.target.value)}
+              className="min-h-[84px] w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] p-2 text-sm text-[hsl(var(--popover-foreground))] focus:outline-none"
+              placeholder="Anything an admin should know (parking, gate code, etc.)"
+            />
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="submit"
+              disabled={busy}
+              className="h-9 rounded-lg bg-white/90 text-black px-4 text-sm disabled:opacity-50"
+              title="Send for approval"
+            >
+              {busy ? "Sending…" : "Submit for approval"}
+            </button>
+            <button
+              type="button"
+              onClick={resetForm}
+              disabled={busy}
+              className="h-9 rounded-lg border border-[hsl(var(--border))] bg-transparent px-4 text-sm text-white/80 hover:bg-white/10 disabled:opacity-50"
+            >
+              Reset
+            </button>
+          </div>
+
+          {/* Messages */}
+          {msg && (
+            <div className="mt-3 rounded-[var(--radius)] border border-emerald-400/30 bg-emerald-400/10 p-3 text-sm text-emerald-200">
+              {msg}
+            </div>
+          )}
+          {err && (
+            <div className="mt-3 rounded-[var(--radius)] border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">
+              {err}
+            </div>
+          )}
+        </form>
       </div>
-
-      {/* Form Card */}
-      <form
-        onSubmit={onSubmit}
-        className="rounded-[var(--radius)] border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 md:p-5 space-y-4 text-[hsl(var(--card-foreground))]"
-      >
-        {/* Group name */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-white/80">Group name *</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g., Iron Sharpens Iron (North Campus)"
-            className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] px-3 text-sm text-[hsl(var(--popover-foreground))] placeholder:text-white/50"
-          />
-          <div className="text-[11px] text-white/50">Use something clear and inviting.</div>
-        </div>
-
-        {/* Location */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-white/80">Location</label>
-          <input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="City, State or address (optional)"
-            className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] px-3 text-sm text-[hsl(var(--popover-foreground))] placeholder:text-white/50"
-          />
-        </div>
-
-        {/* Schedule row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-white/80">Day</label>
-            <select
-              value={day}
-              onChange={(e) => setDay(e.target.value)}
-              className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] px-3 text-sm text-[hsl(var(--popover-foreground))]"
-            >
-              <option value="">—</option>
-              {DAYS.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-white/80">Time</label>
-            <input
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] px-3 text-sm text-[hsl(var(--popover-foreground))]"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-white/80">Timezone</label>
-            <select
-              value={tz}
-              onChange={(e) => setTz(e.target.value)}
-              className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] px-3 text-sm text-[hsl(var(--popover-foreground))]"
-            >
-              {TZ_CHOICES.map((z) => (
-                <option key={z} value={z}>
-                  {z}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Notes */}
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-white/80">Notes (optional)</label>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={4}
-            placeholder="Anything else the approver should know…"
-            className="w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] px-3 py-2 text-sm text-[hsl(var(--popover-foreground))] placeholder:text-white/50"
-          />
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-3">
-          <button
-            type="submit"
-            disabled={disabled}
-            className="h-10 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--secondary))] px-4 text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] disabled:opacity-50"
-          >
-            {submitting ? "Submitting…" : isDemo ? "Try demo submit" : "Submit request"}
-          </button>
-
-          {error && <div className="text-sm text-red-300">{error}</div>}
-          {msg && <div className="text-sm text-emerald-300">{msg}</div>}
-        </div>
-
-        <div className="text-[11px] text-white/50">
-          Submitting with Demo mode enabled will not save anything to the database.
-        </div>
-      </form>
     </div>
   );
 }
