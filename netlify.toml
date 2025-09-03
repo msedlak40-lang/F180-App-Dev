@@ -1,0 +1,7 @@
+[build]
+base = "webapp"
+publish = "dist"
+command = "npm ci --include=dev || npm install && npm run build"
+
+[build.environment]
+NODE_VERSION = "20"

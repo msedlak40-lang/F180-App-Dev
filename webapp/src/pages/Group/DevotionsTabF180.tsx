@@ -12,7 +12,7 @@ type DevSeries = {
 
 type DevEntry = {
   id: string;
-  series_id?: string | null;
+  series_id: string | null;
   title?: string | null;
   body?: string | null;
   content?: string | null;
@@ -68,22 +68,35 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
   const [tab, setTab] = React.useState<DevTabKey>("devotions");
   const DEV_TABS: DevTabKey[] = ["devotions", "highlights", "bookmarks", "archived"];
 
-  // ---- Services loader
+  // ---- Services loader: load LIVE first, then overlay preview helpers (f180)
   const devSvcRef = React.useRef<any>(null);
   const [svcReady, setSvcReady] = React.useState(false);
+
   React.useEffect(() => {
-    let mounted = true;
+    let cancelled = false;
     (async () => {
       try {
-        const mod = await import("../../services/devotions");
-        if (!mounted) return;
-        devSvcRef.current = mod;
+        // 1) Always load the stable/live services first
+        const base = await import("../../services/devotions");
+        let merged: any = { ...base };
+
+        // 2) Try to overlay the preview helpers (bookmark/archive/highlight lists)
+        try {
+          const overlay = await import("../../services/devotions.f180");
+          // overlay wins for any same-named exports
+          merged = { ...base, ...overlay };
+        } catch {
+          console.info("[Devotions] devotions.f180 overlay not found/failed; using base services only");
+        }
+
+        if (cancelled) return;
+        devSvcRef.current = merged;
         setSvcReady(true);
       } catch (e) {
-        console.error("[Devotions] failed to load services/devotions", e);
+        console.error("[Devotions] failed to load services", e);
       }
     })();
-    return () => { mounted = false; };
+    return () => { cancelled = true; };
   }, []);
 
   // ---- Data
@@ -160,7 +173,6 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
   }
   async function markReadCompat(seriesId: string, entryId: string) {
     const svc: any = devSvcRef.current;
-    if (!svc) return;
     if (svc?.upsertEntryProgress) {
       await svc.upsertEntryProgress(seriesId, entryId, { is_read: true });
       return;
@@ -172,7 +184,6 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
   }
   async function toggleBookmarkEntryCompat(seriesId: string, entryId: string, bookmarked: boolean) {
     const svc: any = devSvcRef.current;
-    if (!svc) return;
     try { return await svc.toggleBookmarkEntry(entryId, bookmarked); } catch {}
     try { return await svc.toggleBookmarkEntry(seriesId, entryId, bookmarked); } catch {}
     try { return await svc.bookmarkEntry(seriesId, entryId, bookmarked); } catch {}
@@ -180,7 +191,6 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
   }
   async function toggleArchiveEntryCompat(seriesId: string, entryId: string, arch: boolean) {
     const svc: any = devSvcRef.current;
-    if (!svc) return;
     try { return await svc.toggleArchiveEntry(entryId, arch); } catch {}
     try { return await svc.toggleArchiveEntry(seriesId, entryId, arch); } catch {}
     try { return await svc.archiveEntry(seriesId, entryId, arch); } catch {}
@@ -201,13 +211,13 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
     try {
       const res = await (svc.listMyBookmarkedEntries?.(gid) ?? svc.listBookmarkedEntries?.(gid) ?? svc.bookmarksForGroup?.(gid));
       if (!res) return out;
-      if (res.bySeries && res.ids) {
-        return { bySeries: res.bySeries, ids: new Set(res.ids) };
+      if ((res as any).bySeries && (res as any).ids) {
+        return { bySeries: (res as any).bySeries, ids: new Set((res as any).ids) };
       }
       const rows: any[] = Array.isArray(res) ? res : [];
       for (const r of rows) {
         const entry = coerceEntries([r.entry ?? r])[0];
-        const sid = String(entry.series_id ?? r.series_id ?? r.sid ?? "");
+        const sid = String(entry.series_id ?? (r as any).series_id ?? (r as any).sid ?? "");
         if (!sid || !entry?.id) continue;
         if (!out.bySeries[sid]) out.bySeries[sid] = [];
         out.bySeries[sid].push(entry);
@@ -224,13 +234,13 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
     try {
       const res = await (svc.listMyArchivedEntries?.(gid) ?? svc.listArchivedEntries?.(gid) ?? svc.archivedForGroup?.(gid));
       if (!res) return out;
-      if (res.bySeries && res.ids) {
-        return { bySeries: res.bySeries, ids: new Set(res.ids) };
+      if ((res as any).bySeries && (res as any).ids) {
+        return { bySeries: (res as any).bySeries, ids: new Set((res as any).ids) };
       }
       const rows: any[] = Array.isArray(res) ? res : [];
       for (const r of rows) {
         const entry = coerceEntries([r.entry ?? r])[0];
-        const sid = String(entry.series_id ?? r.series_id ?? r.sid ?? "");
+        const sid = String(entry.series_id ?? (r as any).series_id ?? (r as any).sid ?? "");
         if (!sid || !entry?.id) continue;
         if (!out.bySeries[sid]) out.bySeries[sid] = [];
         out.bySeries[sid].push(entry);
@@ -329,23 +339,23 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
     const list = Array.isArray(rows) ? rows : [];
     const out: AggHighlight[] = [];
     for (const r of list) {
-      const h = r.highlight || r.h || r;
-      const e = r.entry || r.e || r.devotion_entry;
-      const s = r.series || r.s || r.devotion_series;
+      const h = (r as any).highlight || (r as any).h || r;
+      const e = (r as any).entry || (r as any).e || (r as any).devotion_entry;
+      const s = (r as any).series || (r as any).s || (r as any).devotion_series;
       if (!h || !e || !s) continue;
       const hh: DevHighlight = {
-        id: String(h.id ?? h.uuid ?? ""),
-        entry_id: String(h.entry_id ?? e.id ?? ""),
-        start: Number(h.start ?? 0),
-        end: Number(h.end ?? 0),
-        text: String(h.text ?? ""),
-        color: h.color ?? null,
-        visibility: h.visibility ?? null,
-        note: h.note ?? null,
-        created_at: h.created_at ?? null,
+        id: String((h as any).id ?? (h as any).uuid ?? ""),
+        entry_id: String((h as any).entry_id ?? (e as any).id ?? ""),
+        start: Number((h as any).start ?? 0),
+        end: Number((h as any).end ?? 0),
+        text: String((h as any).text ?? ""),
+        color: (h as any).color ?? null,
+        visibility: (h as any).visibility ?? null,
+        note: (h as any).note ?? null,
+        created_at: (h as any).created_at ?? null,
       };
       const ee: DevEntry = coerceEntries([e])[0];
-      const ss: DevSeries = { id: String(s.id ?? ee.series_id ?? ""), title: s.title ?? null, created_at: s.created_at ?? null };
+      const ss: DevSeries = { id: String((s as any).id ?? ee.series_id ?? ""), title: (s as any).title ?? null, created_at: (s as any).created_at ?? null };
       if (hh.id && ee?.id && ss?.id) out.push({ highlight: hh, entry: ee, series: ss });
     }
     // dedupe/sort
@@ -358,11 +368,13 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
       uniq.push(it);
     }
     uniq.sort((a, b) => {
-      const ta = a.highlight.created_at ? Date.parse(a.highlight.created_at) : 0;
-      const tb = b.highlight.created_at ? Date.parse(b.highlight.created_at) : 0;
+      const ta = itTime(a.highlight.created_at);
+      const tb = itTime(b.highlight.created_at);
       return tb - ta || (a.highlight.start - b.highlight.start);
     });
     return uniq;
+
+    function itTime(t?: string | null) { return t ? Date.parse(t) : 0; }
   }
 
   // ---- Initial load
@@ -860,8 +872,8 @@ export default function DevotionsTabF180({ groupId }: { groupId: string }) {
                                     title={e.title || `Day ${e.position ?? idx + 1}`}
                                   >
                                     <span className="mr-2 opacity-80">Day {e.position ?? idx + 1}</span>
-                                    {read && <span className="inline-block h-2 w-2 rounded-full bg-white/80 align-middle" />}
-                                    {isBookmarked && !read && <span className="inline-block h-2 w-2 rounded-full bg-black/60 align-middle" />}
+                                    {read && <span className="inline-block h-2 w-2 rounded-full align-middle" />}
+                                    {isBookmarked && !read && <span className="inline-block h-2 w-2 rounded-full align-middle" />}
                                   </button>
                                 );
                               })}
