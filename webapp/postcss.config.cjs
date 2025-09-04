@@ -1,4 +1,4 @@
-// C:\Users\Trader\Desktop\F180 App Dev\webapp\postcss.config.cjs
+// Tailwind v4 + PostCSS (matches your local setup)
 module.exports = {
   plugins: {
     '@tailwindcss/postcss': {},
