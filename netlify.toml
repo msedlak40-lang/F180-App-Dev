@@ -1,21 +1,7 @@
 [build]
-base = "webapp"
-publish = "dist"
-command = "npm ci && npm run build"
+  base    = "webapp"
+  publish = "dist"
+  command = "npm ci && npm run build"
 
 [build.environment]
-NODE_VERSION = "22.18.0"
-
-//# --- NEW: env toggles by context ---
-
-//# Production deploys (main)
-//[context.production.environment]
-//VITE_F180 = "0"   # old UI in prod
-
-//# Branch deploys for "preview"
-//[context."branch:preview".environment]
-//VITE_F180 = "1"   # new UI on the preview branch
-
-//# Netlify Deploy Previews (PRs)
-//[context.deploy-preview.environment]
-//VITE_F180 = "1"   # new UI on PR previews
+  NODE_VERSION = "22.18.0"
