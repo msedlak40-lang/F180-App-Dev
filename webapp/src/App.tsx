@@ -1,11 +1,11 @@
 import React from 'react';
 import { supabase } from './lib/supabaseClient';
 
-import VersesTab from './pages/Group/VersesTab';
-import DevotionsTab from './pages/Group/DevotionsTab';
-import StudyTab from './pages/Group/StudyTab';
-import JournalTab from './pages/Group/JournalTab';
-import PrayersTab from './pages/Group/PrayersTab';
+import VersesTab from './pages/Group/VersesTabF180';
+import DevotionsTab from './pages/Group/DevotionsTabF180';
+import StudyTab from './pages/Group/StudyTabF180';
+import JournalTab from './pages/Group/JournalTabF180';
+import PrayersTab from './pages/Group/GroupPrayersTabF180';
 import GroupSubNav from './components/GroupSubNav';
 import LibraryPage from './pages/Library/LibraryPage';
 import AcceptStudyInvite from './pages/AcceptStudyInvite';
