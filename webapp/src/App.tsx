@@ -1,40 +1,30 @@
-import React from 'react';
+import * as React from 'react';
 import { supabase } from './lib/supabaseClient';
 
+// NEW: point to F180 pages
 import VersesTab from './pages/Group/VersesTabF180';
 import DevotionsTab from './pages/Group/DevotionsTabF180';
 import StudyTab from './pages/Group/StudyTabF180';
 import JournalTab from './pages/Group/JournalTabF180';
-import PrayersTab from './pages/Group/GroupPrayersTabF180';
-import GroupSubNav from './components/GroupSubNav';
-import LibraryPage from './pages/Library/LibraryPage';
-import AcceptStudyInvite from './pages/AcceptStudyInvite';
-import ApprovalsPage from './pages/Admin/ApprovalsPage';
-import RequestGroupPage from './pages/Group/RequestGroupPage'; // form page
-import LeaderInbox from './components/LeaderInbox';
+// Keep Prayers (switch to F180 if you have it)
+import PrayersTab from './pages/Group/PrayersTab';
 
 import GroupSelector from './components/GroupSelector';
-import AuthBar from './components/AuthBar';
-import { ToastProvider } from './components/ToastProvider';
-import FiresidePreview from './pages/FiresidePreview';
-import LibraryPageF180 from './pages/Library/LibraryPageF180';
-import VersesTabF180 from './pages/Group/VersesTabF180';
-import DevotionsTabF180 from './pages/Group/DevotionsTabF180';
-import { renderF180PreviewRoute } from "./preview/F180PreviewRoutes";
-import JournalTabF180 from "./pages/Group/JournalTabF180";
+// import GroupSubNav from './components/GroupSubNav'; // (optional) if you use it
 
-// F180 preview shell + logo assets
-import F180Page from './components/F180Page';
-import logoWordmarkUrl from './assets/fireside180-wordmark.svg';
-import logoMarkUrl from './assets/fireside180-logo-mark.svg';
+// Keep these utility pages
+import AcceptStudyInvite from './pages/AcceptStudyInvite';
+import ApprovalsPage from './pages/Admin/ApprovalsPage';
+import RequestGroupPage from './pages/Group/RequestGroupPage';
 
-// ⬇️ NEW: F180 toast provider for preview routes
-import { F180ToastProvider } from './components/f180/F180ToastProvider';
-// near the other F180 imports
-import StudyTabF180 from './pages/Group/StudyTabF180';
+// Removed: Library (Preview) and Inbox
+// import LibraryPage from './pages/Library/LibraryPage';
+// import LeaderInbox from './components/LeaderInbox';
 
+// F180 toast provider
+import { F180ToastProvider as ToastProvider } from './components/f180/F180ToastProvider';
 
-/** Parse the current hash into path + segments + query. */
+/** Tiny hash router helper */
 function useHashRoute() {
   const [hash, setHash] = React.useState<string>(() => window.location.hash || '#/');
 
@@ -44,394 +34,125 @@ function useHashRoute() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  const noHash = hash.startsWith('#') ? hash.slice(1) : hash;
-  const [pathPart, queryPart] = noHash.split('?');
-  const path = pathPart.replace(/^\/+/, '');
+  const raw = hash.replace(/^#/, '');
+  const [path, queryStr] = raw.split('?');
   const segments = path.split('/').filter(Boolean);
-  const query = new URLSearchParams(queryPart || '');
+
+  const query = React.useMemo(() => {
+    const out: Record<string, string> = {};
+    if (!queryStr) return out;
+    for (const part of queryStr.split('&')) {
+      const [k, v] = part.split('=');
+      if (!k) continue;
+      out[decodeURIComponent(k)] = decodeURIComponent(v || '');
+    }
+    return out;
+  }, [queryStr]);
 
   return { hash, path, segments, query };
 }
 
-export default function App() {
+function App() {
   const { segments } = useHashRoute();
 
-  const [currentGroupId, setCurrentGroupId] = React.useState<string | null>(null);
-  const [ready, setReady] = React.useState(false);
-
-  // Ensure auth is initialized
-  React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      await supabase.auth.getSession();
-      if (mounted) setReady(true);
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  // Sync currentGroupId from URL
-  React.useEffect(() => {
-    if (segments[0] === 'group' && segments[1]) {
-      setCurrentGroupId(segments[1]);
-    }
-  }, [segments]);
-
-  function goto(nextHash: string) {
-    window.location.hash = nextHash.startsWith('#') ? nextHash : `#${nextHash}`;
+  // Redirect root to /groups so users hit the NEW flow immediately
+  if (segments.length === 0) {
+    window.location.hash = '/groups';
+    return null;
   }
 
-  function Header({ showSelector }: { showSelector: boolean }) {
-    return (
-      <div className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b">
-        {/* Top row: brand + nav + auth */}
-        <div className="max-w-5xl mx-auto p-3 flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold">Fireside</div>
+  // Simple goto helper
+  const goto = (to: string) => {
+    if (!to.startsWith('/')) to = '/' + to;
+    window.location.hash = to;
+  };
 
-          <div className="flex items-center gap-3">
-            {/* Groups → default to current group's Verses, else welcome */}
-            <button
-              className="text-sm underline"
-              onClick={() => {
-                if (currentGroupId) goto(`/group/${currentGroupId}/verses`);
-                else goto('/');
-              }}
-            >
-              Groups
-            </button>
+  // --- ROUTES ---
 
-            {/* Request Group → dedicated page with only the form */}
-            <button
-              className="text-sm underline"
-              onClick={() => goto('/request-group')}
-            >
-              Request Group
-            </button>
-
-            <button className="text-sm underline" onClick={() => goto('/library')}>
-              Library
-            </button>
-            <button className="text-sm underline" onClick={() => goto('/library-style')}>
-              Library (Preview)
-            </button>
-
-            {/* Inbox → dedicated view */}
-            <button
-              className="text-sm underline disabled:opacity-50"
-              disabled={!currentGroupId}
-              onClick={() => currentGroupId && goto(`/group/${currentGroupId}/inbox`)}
-              title={currentGroupId ? 'Open Leader Inbox' : 'Pick a group first'}
-            >
-              Inbox
-            </button>
-
-            <AuthBar />
-          </div>
-        </div>
-
-        {/* Second row: group selector */}
-        {showSelector && (
-          <div className="border-t">
-            <div className="max-w-5xl mx-auto p-3">
-              <div className="w-full max-w-md">
-                <GroupSelector
-                  groupId={currentGroupId ?? ''}
-                  onChange={(gid: string) => {
-                    setCurrentGroupId(gid);
-                    goto(`/group/${gid}/verses`);
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (!ready) {
-    return (
-      <div className="max-w-4xl mx-auto p-6">
-        <div className="text-sm opacity-70">Loading…</div>
-      </div>
-    );
-  }
-
-  // Preview page (kept outside your normal shell to avoid double header)
-  if (segments[0] === 'style') {
-    return <FiresidePreview />;
-  }
-  const preview = renderF180PreviewRoute(segments);
-  if (preview) return preview;
-
-  // F180-styled preview of your real Library page (safe, isolated)
-  if (segments[0] === 'library-style') {
-    return (
-      <F180ToastProvider>
-        <F180Page
-          nav={[
-            { label: 'Groups', href: '/#/groups' },
-            { label: 'Verses', href: '/#/verses' },
-            { label: 'Devotions', href: '/#/devotions' },
-            { label: 'Journal', href: '/#/journal' },
-            { label: 'Inbox', href: '/#/inbox' },
-            { label: 'Prayers', href: '/#/prayers' },
-            { label: 'Library', href: '/#/library' },
-          ]}
-          logoMarkSrc={logoMarkUrl}
-          logoWordmarkSrc={logoWordmarkUrl}
-        >
-          <div className="space-y-6">
-            <h1 className="text-2xl font-semibold tracking-tight">Library (styled preview)</h1>
-            <LibraryPageF180 />
-          </div>
-        </F180Page>
-      </F180ToastProvider>
-    );
-  }
-
-  // F180-styled preview of the group Verses page
-  if (segments[0] === 'group' && segments[1] && segments[2] === 'verses-style') {
-    const gid = segments[1];
-    return (
-      <F180ToastProvider>
-        <F180Page
-          nav={[
-            { label: 'Groups', href: '/#/groups' },
-            { label: 'Verses', href: `/#/group/${gid}/verses` },
-            { label: 'Devotions', href: `/#/group/${gid}/devotions` },
-            { label: 'Journal', href: `/#/group/${gid}/journal` },
-            { label: 'Inbox', href: `/#/group/${gid}/inbox` },
-            { label: 'Prayers', href: `/#/group/${gid}/prayers` },
-            { label: 'Library', href: '/#/library' },
-          ]}
-          logoMarkSrc={logoMarkUrl}
-          logoWordmarkSrc={logoWordmarkUrl}
-        >
-          <div className="space-y-6">
-            <h1 className="text-2xl font-semibold tracking-tight">Verses (styled preview)</h1>
-            <VersesTabF180 groupId={gid} />
-          </div>
-        </F180Page>
-      </F180ToastProvider>
-    );
-  }
-
-// ⬇️ F180-styled preview of the group Journal page
-if (segments[0] === 'group' && segments[1] && segments[2] === 'journal-f180') {
-  const gid = segments[1];
-  return (
-    <F180ToastProvider>
-      <F180Page
-        nav={[
-          { label: 'Groups',   href: '/#/groups' },
-          { label: 'Verses',   href: `/#/group/${gid}/verses` },
-          { label: 'Devotions',href: `/#/group/${gid}/devotions` },
-          { label: 'Journal',  href: `/#/group/${gid}/journal` }, // live route
-          { label: 'Inbox',    href: `/#/group/${gid}/inbox` },
-          { label: 'Prayers',  href: `/#/group/${gid}/prayers` },
-          { label: 'Library',  href: '/#/library' },
-        ]}
-        logoMarkSrc={logoMarkUrl}
-        logoWordmarkSrc={logoWordmarkUrl}
-      >
-        <div className="space-y-6">
-          <h1 className="text-2xl font-semibold tracking-tight">Journal (styled preview)</h1>
-          <JournalTabF180 groupId={gid} />
-        </div>
-      </F180Page>
-    </F180ToastProvider>
-  );
-}
-
-  // ⬇️ F180-styled preview of the group Devotions page
-  if (segments[0] === 'group' && segments[1] && segments[2] === 'devotions-f180') {
-    const gid = segments[1];
-    return (
-      <F180ToastProvider>
-        <F180Page
-          nav={[
-            { label: 'Groups', href: '/#/groups' },
-            { label: 'Verses', href: `/#/group/${gid}/verses` },
-            { label: 'Devotions', href: `/#/group/${gid}/devotions` }, // live route
-            { label: 'Journal', href: `/#/group/${gid}/journal` },
-            { label: 'Inbox', href: `/#/group/${gid}/inbox` },
-            { label: 'Prayers', href: `/#/group/${gid}/prayers` },
-            { label: 'Library', href: '/#/library' },
-          ]}
-          logoMarkSrc={logoMarkUrl}
-          logoWordmarkSrc={logoWordmarkUrl}
-        >
-          <div className="space-y-6">
-            <h1 className="text-2xl font-semibold tracking-tight">Devotions (styled preview)</h1>
-            <DevotionsTabF180 groupId={gid} />
-          </div>
-        </F180Page>
-      </F180ToastProvider>
-    );
-  }
-// ⬇️ F180-styled preview of the group Study page
-if (segments[0] === 'group' && segments[1] && segments[2] === 'study-f180') {
-  const gid = segments[1];
-  return (
-    <F180ToastProvider>
-      <F180Page
-        nav={[
-          { label: 'Groups', href: '/#/groups' },
-          { label: 'Verses', href: `/#/group/${gid}/verses` },      // live links kept intact
-          { label: 'Devotions', href: `/#/group/${gid}/devotions` },// live
-          { label: 'Study', href: `/#/group/${gid}/study` },        // live
-          { label: 'Journal', href: `/#/group/${gid}/journal` },
-          { label: 'Inbox', href: `/#/group/${gid}/inbox` },
-          { label: 'Prayers', href: `/#/group/${gid}/prayers` },
-          { label: 'Library', href: '/#/library' },
-        ]}
-        logoMarkSrc={logoMarkUrl}
-        logoWordmarkSrc={logoWordmarkUrl}
-      >
-        <div className="space-y-6">
-          <h1 className="text-2xl font-semibold tracking-tight">Study (styled preview)</h1>
-          <StudyTabF180 groupId={gid} />
-        </div>
-      </F180Page>
-    </F180ToastProvider>
-  );
-}
-
-  // Standalone pages
-  if (segments[0] === 'study-accept') {
-    return (
-      <ToastProvider>
-        <div className="max-w-4xl mx-auto p-4">
-          <AcceptStudyInvite />
-        </div>
-      </ToastProvider>
-    );
-  }
-
-  if (segments[0] === 'admin' && segments[1] === 'approvals') {
-    return (
-      <ToastProvider>
-        <Header showSelector={false} />
-        <div className="max-w-5xl mx-auto p-4">
-          <ApprovalsPage />
-        </div>
-      </ToastProvider>
-    );
-  }
-
-  if (segments[0] === 'library') {
-    return (
-      <ToastProvider>
-        <Header showSelector={false} />
-        <div className="max-w-5xl mx-auto p-4">
-          <LibraryPage />
-        </div>
-      </ToastProvider>
-    );
-  }
-
-  // request-group dedicated page (form only, no welcome block)
+  // Request a new group (form)
   if (segments[0] === 'request-group') {
     return (
       <ToastProvider>
-        <Header showSelector={false} />
-        <div className="max-w-5xl mx-auto p-4">
+        <div className="mx-auto max-w-5xl px-4 py-6">
           <RequestGroupPage />
         </div>
       </ToastProvider>
     );
   }
 
-  // Dedicated Leader Inbox page
-  if (segments[0] === 'group' && segments[1] && segments[2] === 'inbox') {
-    const gid = segments[1];
+  // Admin approvals
+  if (segments[0] === 'admin' && segments[1] === 'approvals') {
     return (
       <ToastProvider>
-        <Header showSelector={true} />
-        <div className="max-w-5xl mx-auto p-4">
-          <div className="rounded-2xl border p-4 bg-white">
-            <div className="text-sm font-semibold mb-2">Leader Inbox</div>
-            <LeaderInbox groupId={gid} />
-          </div>
+        <div className="mx-auto max-w-6xl px-4 py-6">
+          <ApprovalsPage />
         </div>
       </ToastProvider>
     );
   }
 
-  // Group tabs
+  // Accept study invite
+  if (segments[0] === 'accept-study-invite') {
+    return (
+      <ToastProvider>
+        <div className="mx-auto max-w-3xl px-4 py-6">
+          <AcceptStudyInvite />
+        </div>
+      </ToastProvider>
+    );
+  }
+
+  // Groups hub
+  if (segments[0] === 'groups') {
+    return (
+      <ToastProvider>
+        <div className="mx-auto max-w-5xl px-4 py-6">
+          <h1 className="text-xl md:text-2xl font-semibold tracking-tight mb-3">Your Fires</h1>
+          <GroupSelector
+            onSelect={(gid: string) => goto(`/group/${gid}/devotions`)}
+            // add other props you use (e.g., currentGroupId) if needed
+          />
+        </div>
+      </ToastProvider>
+    );
+  }
+
+  // Group routes: /group/:gid/:tab
   if (segments[0] === 'group' && segments[1]) {
     const gid = segments[1];
-    const tab = segments[2] || 'verses';
+    const tab = segments[2] || 'devotions';
+
+    // Optional: your own subnav component if you want it
+    // const subnav = (
+    //   <GroupSubNav
+    //     groupId={gid}
+    //     active={tab}
+    //     onNavigate={(next: string) => goto(`/group/${gid}/${next}`)}
+    //   />
+    // );
 
     return (
       <ToastProvider>
-        <Header showSelector={true} />
-        <div className="max-w-5xl mx-auto p-4">
-          {/* Tabs */}
-          <div className="mb-3">
-            <div className="flex flex-wrap gap-2">
-              {[
-                ['verses', 'Verses'],
-                ['devotions', 'Devotions'],
-                ['study', 'Study'],
-                ['journal', 'Journal'],
-                ['prayers', 'Prayers'],
-              ].map(([key, label]) => (
-                <button
-                  key={key}
-                  className={`text-sm rounded-lg border px-3 py-1.5 ${
-                    tab === key ? 'bg-gray-50' : 'bg-white'
-                  }`}
-                  onClick={() => goto(`/group/${gid}/${key}`)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Active tab */}
+        <div className="mx-auto max-w-6xl px-3 md:px-6 py-4">
+          {/* {subnav} */}
           {tab === 'verses' && <VersesTab groupId={gid} />}
           {tab === 'devotions' && <DevotionsTab groupId={gid} />}
           {tab === 'study' && <StudyTab groupId={gid} />}
           {tab === 'journal' && <JournalTab groupId={gid} />}
           {tab === 'prayers' && <PrayersTab groupId={gid} />}
+
+          {/* default to devotions if no known tab */}
+          {!['verses', 'devotions', 'study', 'journal', 'prayers'].includes(tab) && (
+            <DevotionsTab groupId={gid} />
+          )}
         </div>
       </ToastProvider>
     );
   }
 
-  // Fallback (welcome)
-  return (
-    <ToastProvider>
-      <Header showSelector={true} />
-      <div className="max-w-5xl mx-auto p-6 grid gap-4">
-        <div className="rounded-2xl border p-4 bg-white">
-          <div className="text-sm font-semibold mb-2">Welcome</div>
-          <div className="text-sm opacity-80">
-            Pick a group to get started, or head to your Library.
-          </div>
-          <div className="mt-3 flex items-center gap-3">
-            <div className="min-w-[260px] max-w-md w-full">
-              <GroupSelector
-                groupId={currentGroupId ?? ''}
-                onChange={(gid: string) => {
-                  setCurrentGroupId(gid);
-                  goto(`/group/${gid}/verses`);
-                }}
-              />
-            </div>
-            <button
-              className="text-sm rounded-lg border px-3 py-1.5"
-              onClick={() => goto('/library')}
-            >
-              Open Library
-            </button>
-          </div>
-        </div>
-      </div>
-    </ToastProvider>
-  );
+  // Fallback: anything else -> groups
+  window.location.hash = '/groups';
+  return null;
 }
+
+export default App;
