@@ -1,158 +1,193 @@
-import * as React from 'react';
-import { supabase } from './lib/supabaseClient';
+// src/App.tsx
+import * as React from "react";
+import { supabase } from "./lib/supabaseClient";
 
-// NEW: point to F180 pages
-import VersesTab from './pages/Group/VersesTabF180';
-import DevotionsTab from './pages/Group/DevotionsTabF180';
-import StudyTab from './pages/Group/StudyTabF180';
-import JournalTab from './pages/Group/JournalTabF180';
-// Keep Prayers (switch to F180 if you have it)
-import PrayersTab from './pages/Group/PrayersTab';
+import { F180ToastProvider as ToastProvider } from "./components/f180/F180ToastProvider";
+import F180Page from "./components/F180Page";
 
-import GroupSelector from './components/GroupSelector';
-// import GroupSubNav from './components/GroupSubNav'; // (optional) if you use it
+// --- Pages (F180-first) ---
+import HomePage from "./pages/Home/HomePageF180";
 
-// Keep these utility pages
-import AcceptStudyInvite from './pages/AcceptStudyInvite';
-import ApprovalsPage from './pages/Admin/ApprovalsPage';
-import RequestGroupPage from './pages/Group/RequestGroupPage';
+import VersesTab from "./pages/Group/VersesTabF180";
+import DevotionsTab from "./pages/Group/DevotionsTabF180";
+import StudyTab from "./pages/Group/StudyTabF180";
+import JournalTab from "./pages/Group/JournalTabF180";
+import PrayersTab from "./pages/Group/GroupPrayersTabF180";
 
-// Removed: Library (Preview) and Inbox
-// import LibraryPage from './pages/Library/LibraryPage';
-// import LeaderInbox from './components/LeaderInbox';
+import RequestGroupPage from "./pages/Group/RequestGroupPageF180";
+import ApprovalsPage from "./pages/Admin/ApprovalsPageF180";
+import GroupMembersPage from "./pages/Group/GroupMembersPageF180";
 
-// F180 toast provider
-import { F180ToastProvider as ToastProvider } from './components/f180/F180ToastProvider';
+import AcceptStudyInvite from "./pages/AcceptStudyInvite";
 
-/** Tiny hash router helper */
+// -------------- tiny hash router helper --------------
 function useHashRoute() {
-  const [hash, setHash] = React.useState<string>(() => window.location.hash || '#/');
+  const [hash, setHash] = React.useState<string>(() => window.location.hash || "#/");
 
   React.useEffect(() => {
-    const onHash = () => setHash(window.location.hash || '#/');
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    const onHash = () => setHash(window.location.hash || "#/");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const raw = hash.replace(/^#/, '');
-  const [path, queryStr] = raw.split('?');
-  const segments = path.split('/').filter(Boolean);
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  const [path, queryStr] = raw.split("?");
+  const segments = path.replace(/^\/+/, "").split("/").filter(Boolean);
+  const query = React.useMemo(() => new URLSearchParams(queryStr || ""), [queryStr]);
 
-  const query = React.useMemo(() => {
-    const out: Record<string, string> = {};
-    if (!queryStr) return out;
-    for (const part of queryStr.split('&')) {
-      const [k, v] = part.split('=');
-      if (!k) continue;
-      out[decodeURIComponent(k)] = decodeURIComponent(v || '');
-    }
-    return out;
-  }, [queryStr]);
-
-  return { hash, path, segments, query };
+  return { segments, query };
 }
 
-function App() {
+export default function App() {
   const { segments } = useHashRoute();
+  const [ready, setReady] = React.useState(false);
 
-  // Redirect root to /groups so users hit the NEW flow immediately
-  if (segments.length === 0) {
-    window.location.hash = '/groups';
-    return null;
-  }
+  // Init Supabase auth before rendering routes
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        await supabase.auth.getSession();
+      } finally {
+        if (mounted) setReady(true);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
-  // Simple goto helper
-  const goto = (to: string) => {
-    if (!to.startsWith('/')) to = '/' + to;
-    window.location.hash = to;
-  };
+  // Current route bits (compute before any returns to keep hook order stable)
+  const isGroup = segments[0] === "group" && !!segments[1];
+  const gid = isGroup ? segments[1] : "";
+  const tab = isGroup ? (segments[2] || "devotions") : "";
 
-  // --- ROUTES ---
+  // Remember last group so nav works from Home/Request/Approvals too
+  const [lastGid, setLastGid] = React.useState<string>(() => {
+    try {
+      return localStorage.getItem("last_gid") || "";
+    } catch {
+      return "";
+    }
+  });
+  React.useEffect(() => {
+    if (gid) {
+      try {
+        localStorage.setItem("last_gid", gid);
+        setLastGid(gid);
+      } catch {}
+    }
+  }, [gid]);
 
-  // Request a new group (form)
-  if (segments[0] === 'request-group') {
+  const activeGid = gid || lastGid;
+
+  // Header nav: ALWAYS show Home + the 5 tabs (order you requested).
+  // If no group known yet, tab links point to Home so nothing breaks.
+  const nav = React.useMemo(() => {
+    const home = { label: "Home", href: "#/" };
+    const base = activeGid ? `#/group/${activeGid}` : "#/";
+    return [
+      home,
+      { label: "Devotions", href: activeGid ? `${base}/devotions` : base },
+      { label: "Study",     href: activeGid ? `${base}/study`     : base },
+      { label: "Verses",    href: activeGid ? `${base}/verses`    : base },
+      { label: "Prayers",   href: activeGid ? `${base}/prayers`   : base },
+      { label: "Journal",   href: activeGid ? `${base}/journal`   : base },
+    ];
+  }, [activeGid]);
+
+  if (!ready) {
     return (
-      <ToastProvider>
-        <div className="mx-auto max-w-5xl px-4 py-6">
-          <RequestGroupPage />
-        </div>
-      </ToastProvider>
+      <div className="f180 min-h-screen bg-[hsl(var(--secondary))]">
+        <div className="mx-auto max-w-6xl px-4 py-8 text-sm opacity-70">Loading…</div>
+      </div>
     );
   }
 
-  // Admin approvals
-  if (segments[0] === 'admin' && segments[1] === 'approvals') {
-    return (
-      <ToastProvider>
-        <div className="mx-auto max-w-6xl px-4 py-6">
-          <ApprovalsPage />
-        </div>
-      </ToastProvider>
-    );
-  }
+  return (
+    <ToastProvider>
+      <F180Page nav={nav}>
+        {/* ---------- ROUTES ---------- */}
 
-  // Accept study invite
-  if (segments[0] === 'accept-study-invite') {
-    return (
-      <ToastProvider>
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          <AcceptStudyInvite />
-        </div>
-      </ToastProvider>
-    );
-  }
+        {/* HOME */}
+        {segments.length === 0 && (
+          <>
+            <h1 className="text-xl md:text-2xl font-semibold tracking-tight mb-3">Home</h1>
+            <HomePage />
+          </>
+        )}
 
-  // Groups hub
-  if (segments[0] === 'groups') {
-    return (
-      <ToastProvider>
-        <div className="mx-auto max-w-5xl px-4 py-6">
-          <h1 className="text-xl md:text-2xl font-semibold tracking-tight mb-3">Your Fires</h1>
-          <GroupSelector
-            onSelect={(gid: string) => goto(`/group/${gid}/devotions`)}
-            // add other props you use (e.g., currentGroupId) if needed
-          />
-        </div>
-      </ToastProvider>
-    );
-  }
+        {/* Accept study invite */}
+        {segments[0] === "accept-study-invite" && <AcceptStudyInvite />}
 
-  // Group routes: /group/:gid/:tab
-  if (segments[0] === 'group' && segments[1]) {
-    const gid = segments[1];
-    const tab = segments[2] || 'devotions';
+        {/* Request a group — route still works (not in top nav) */}
+        {(segments[0] === "request-group" || segments[0] === "request-group-f180") && (
+          <div className="mx-auto max-w-5xl px-4 py-6">
+            <RequestGroupPage />
+          </div>
+        )}
 
-    // Optional: your own subnav component if you want it
-    // const subnav = (
-    //   <GroupSubNav
-    //     groupId={gid}
-    //     active={tab}
-    //     onNavigate={(next: string) => goto(`/group/${gid}/${next}`)}
-    //   />
-    // );
+        {/* Admin approvals — route still works (not in top nav) */}
+        {((segments[0] === "admin" && segments[1] === "approvals") ||
+          (segments[0] === "admin" && segments[1] === "approvals-f180")) && (
+          <div className="mx-auto max-w-6xl px-4 py-6">
+            <ApprovalsPage />
+          </div>
+        )}
 
-    return (
-      <ToastProvider>
-        <div className="mx-auto max-w-6xl px-3 md:px-6 py-4">
-          {/* {subnav} */}
-          {tab === 'verses' && <VersesTab groupId={gid} />}
-          {tab === 'devotions' && <DevotionsTab groupId={gid} />}
-          {tab === 'study' && <StudyTab groupId={gid} />}
-          {tab === 'journal' && <JournalTab groupId={gid} />}
-          {tab === 'prayers' && <PrayersTab groupId={gid} />}
+        {/* Group members — accept both plain and -f180 */}
+        {isGroup && (segments[2] === "members" || segments[2] === "members-f180") && (
+          <div className="mx-auto max-w-6xl px-3 md:px-6 py-4">
+            <GroupMembersPage groupId={gid} />
+          </div>
+        )}
 
-          {/* default to devotions if no known tab */}
-          {!['verses', 'devotions', 'study', 'journal', 'prayers'].includes(tab) && (
-            <DevotionsTab groupId={gid} />
+        {/* Special Verses route used by HomePageF180 (verses-style) */}
+        {isGroup && segments[2] === "verses-style" && (
+          <div className="mx-auto max-w-6xl px-3 md:px-6 py-4">
+            <VersesTab groupId={gid} />
+          </div>
+        )}
+
+        {/* Group tabs */}
+        {isGroup &&
+          (!segments[2] ||
+            ["verses", "devotions", "study", "journal", "prayers"].includes(segments[2])) && (
+            <div className="mx-auto max-w-6xl px-3 md:px-6 py-4">
+              {(() => {
+                switch (tab) {
+                  case "verses":
+                    return <VersesTab groupId={gid} />;
+                  case "study":
+                    return <StudyTab groupId={gid} />;
+                  case "journal":
+                    return <JournalTab groupId={gid} />;
+                  case "prayers":
+                    return <PrayersTab groupId={gid} />; // F180 version
+                  case "devotions":
+                  default:
+                    return <DevotionsTab groupId={gid} />;
+                }
+              })()}
+            </div>
           )}
-        </div>
-      </ToastProvider>
-    );
-  }
 
-  // Fallback: anything else -> groups
-  window.location.hash = '/groups';
-  return null;
+        {/* Fallback → Home */}
+        {segments.length > 0 &&
+          !isGroup &&
+          segments[0] !== "request-group" &&
+          segments[0] !== "request-group-f180" &&
+          !(
+            segments[0] === "admin" &&
+            (segments[1] === "approvals" || segments[1] === "approvals-f180")
+          ) &&
+          segments[0] !== "accept-study-invite" && (
+            <>
+              <h1 className="text-xl md:text-2xl font-semibold tracking-tight mb-3">Home</h1>
+              <HomePage />
+            </>
+          )}
+      </F180Page>
+    </ToastProvider>
+  );
 }
-
-export default App;
