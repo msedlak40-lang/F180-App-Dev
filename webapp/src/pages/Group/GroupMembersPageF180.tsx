@@ -164,8 +164,6 @@ export default function GroupMembersPageF180(props: {
       setInvites(((iData ?? []) as any[]).slice());
 
       // 5) Can current user manage? (leader or owner, plus org-admin if available)
-      // NOTE: We treat 'owner' like 'leader'. Also, if the org-admin check throws (schema differences),
-      // we default to NOT admin but preserve leader/owner permissions.
       {
         const amLeader =
           (currentUserId &&
@@ -236,7 +234,25 @@ export default function GroupMembersPageF180(props: {
     setLoading(false);
   }
 
-  // ---------- Actions (now using services) ----------
+  // ---------- Helpers: email function invoke ----------
+
+  async function sendInviteEmail(group_id: string, email: string) {
+    const { data, error } = await supabase.functions.invoke("send-invite-email", {
+      body: { group_id, email },
+    });
+    if (error) throw new Error(error.message ?? "Failed to send invite email");
+    return data;
+  }
+
+  async function resendInviteEmail(invitation_id: string) {
+    const { data, error } = await supabase.functions.invoke("send-invite-email", {
+      body: { invitation_id },
+    });
+    if (error) throw new Error(error.message ?? "Failed to resend invite email");
+    return data;
+  }
+
+  // ---------- Actions (using services + email function) ----------
 
   async function sendInvite(email: string) {
     setInviteSending(true);
@@ -251,7 +267,12 @@ export default function GroupMembersPageF180(props: {
         ]);
         setMsg("✅ Demo: invite queued (not saved).");
       } else {
+        // 1) Create/ensure the invite exists in DB (your existing service)
         await svcInviteMember(groupId, email);
+
+        // 2) Send the email via Edge Function (handles token + link)
+        await sendInviteEmail(groupId, email);
+
         setMsg("✅ Invite sent.");
         await load();
       }
@@ -272,7 +293,12 @@ export default function GroupMembersPageF180(props: {
         await new Promise((r) => setTimeout(r, 300));
         setMsg("✅ Demo: resend queued.");
       } else {
+        // (optional) keep your DB 'resend' bookkeeping
         await svcResendInvite(inviteId);
+
+        // Send email again via Edge Function
+        await resendInviteEmail(inviteId);
+
         setMsg("✅ Invite resent.");
       }
     } catch (e: any) {
@@ -509,7 +535,15 @@ export default function GroupMembersPageF180(props: {
                           className="rounded border border-[hsl(var(--border))] px-2 py-1 text-xs hover:bg-[hsl(var(--muted))]"
                           disabled={!canManage}
                           title={!canManage ? "You don’t have permission" : ""}
-                          onClick={() => resendInvite(i.id)}
+                          onClick={async () => {
+                            try {
+                              await svcResendInvite(i.id); // optional bookkeeping
+                              await resendInviteEmail(i.id); // actual email
+                              setMsg("✅ Invite resent.");
+                            } catch (e: any) {
+                              setError(e?.message ?? "Failed to resend invite");
+                            }
+                          }}
                         >
                           Resend
                         </button>
