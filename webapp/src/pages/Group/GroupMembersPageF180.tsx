@@ -62,9 +62,6 @@ export default function GroupMembersPageF180(props: {
   const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
   const [canManage, setCanManage] = React.useState(false); // leader/owner or org-admin
 
-  // Demo mode
-  const [isDemo, setIsDemo] = React.useState(false);
-
   // Invite modal
   const [inviteOpen, setInviteOpen] = React.useState(false);
   const [inviteEmail, setInviteEmail] = React.useState("");
@@ -82,18 +79,6 @@ export default function GroupMembersPageF180(props: {
   }, []);
 
   React.useEffect(() => {
-    try {
-      const hash =
-        typeof window !== "undefined" && window.location && typeof window.location.hash === "string"
-          ? window.location.hash
-          : "";
-      const params = new URLSearchParams(hash.split("?")[1] || "");
-      const demo = params.get("demo");
-      if (demo === "1") {
-        enableDemo();
-        return;
-      }
-    } catch {}
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId, currentUserId]);
@@ -178,31 +163,9 @@ export default function GroupMembersPageF180(props: {
     }
   }
 
-  function enableDemo() {
-    setIsDemo(true);
-    setGroupName(groupNameProp ?? "North KC | John Smith");
-    const demoMembers: MemberRow[] = [
-      {
-        user_id: "u_me",
-        role: "leader" as Role,
-        created_at: new Date().toISOString(),
-        profile: { id: "u_me", display_name: "You (Leader)", email: "you@example.com" },
-      },
-      { user_id: "u_1", role: "member" as Role, created_at: new Date(Date.now() - 3600_000).toISOString(), profile: { id: "u_1", display_name: "Mark S.", email: "mark@demo.com" } },
-      { user_id: "u_2", role: "member" as Role, created_at: new Date(Date.now() - 7200_000).toISOString(), profile: { id: "u_2", display_name: "Jake T.", email: "jake@demo.com" } },
-    ];
-    const demoInvites: InviteRow[] = [
-      { id: "i_1", group_id: groupId, email: "invitee@demo.com", invited_by: "u_me", status: "pending", created_at: new Date().toISOString() },
-    ];
-    setMembers(demoMembers);
-    setInvites(demoInvites);
-    setCanManage(true);
-    setLoading(false);
-  }
-
-  // ---------- Edge function helpers ----------
-
+  // ---------- Edge function helpers (ONLY path for invites) ----------
   async function sendInviteEmail(group_id: string, email: string) {
+    console.log("F180 invite v3: sendInviteEmail", { group_id, email });
     const { data, error } = await supabase.functions.invoke("send-invite-email", {
       body: { group_id, email },
     });
@@ -211,6 +174,7 @@ export default function GroupMembersPageF180(props: {
   }
 
   async function resendInviteEmail(invitation_id: string) {
+    console.log("F180 invite v3: resendInviteEmail", { invitation_id });
     const { data, error } = await supabase.functions.invoke("send-invite-email", {
       body: { invitation_id },
     });
@@ -219,25 +183,14 @@ export default function GroupMembersPageF180(props: {
   }
 
   // ---------- Actions ----------
-
   async function sendInvite(email: string) {
     setInviteSending(true);
     setMsg(null);
     setError(null);
     try {
-      if (isDemo) {
-        await new Promise((r) => setTimeout(r, 300));
-        setInvites((v) => [
-          { id: "i_demo", group_id: groupId, email, invited_by: "u_me", status: "pending", created_at: new Date().toISOString() },
-          ...v,
-        ]);
-        setMsg("✅ Demo: invite queued (not saved).");
-      } else {
-        // Create/refresh invite row + send email in the function
-        await sendInviteEmail(groupId, email);
-        setMsg("✅ Invite sent.");
-        await load();
-      }
+      await sendInviteEmail(groupId, email);
+      setMsg("✅ Invite sent.");
+      await load();
       setInviteOpen(false);
       setInviteEmail("");
     } catch (e: any) {
@@ -251,13 +204,8 @@ export default function GroupMembersPageF180(props: {
     setMsg(null);
     setError(null);
     try {
-      if (isDemo) {
-        await new Promise((r) => setTimeout(r, 300));
-        setMsg("✅ Demo: resend queued.");
-      } else {
-        await resendInviteEmail(inviteId);
-        setMsg("✅ Invite resent.");
-      }
+      await resendInviteEmail(inviteId);
+      setMsg("✅ Invite resent.");
     } catch (e: any) {
       setError(e?.message ?? "Failed to resend invite");
     }
@@ -267,18 +215,13 @@ export default function GroupMembersPageF180(props: {
     setMsg(null);
     setError(null);
     try {
-      if (isDemo) {
-        setInvites((v) => v.filter((i) => i.id !== inviteId));
-        setMsg("✅ Demo: invite canceled.");
-      } else {
-        const { error } = await supabase
-          .from("group_invitations")
-          .update({ status: "revoked" })
-          .eq("id", inviteId);
-        if (error) throw error;
-        setMsg("✅ Invite canceled.");
-        await load();
-      }
+      const { error } = await supabase
+        .from("group_invitations")
+        .update({ status: "revoked" })
+        .eq("id", inviteId);
+      if (error) throw error;
+      setMsg("✅ Invite canceled.");
+      await load();
     } catch (e: any) {
       setError(e?.message ?? "Failed to cancel invite");
     }
@@ -288,14 +231,9 @@ export default function GroupMembersPageF180(props: {
     setMsg(null);
     setError(null);
     try {
-      if (isDemo) {
-        setMembers((v) => v.filter((m) => m.user_id !== userId));
-        setMsg("✅ Demo: member removed.");
-      } else {
-        await svcRemoveMember(groupId, userId);
-        setMsg("✅ Member removed.");
-        await load();
-      }
+      await svcRemoveMember(groupId, userId);
+      setMsg("✅ Member removed.");
+      await load();
     } catch (e: any) {
       setError(e?.message ?? "Failed to remove member");
     }
@@ -305,13 +243,9 @@ export default function GroupMembersPageF180(props: {
     setMsg(null);
     setError(null);
     try {
-      if (isDemo) {
-        setMsg("✅ Demo: you left the group.");
-      } else if (currentUserId) {
-        await svcLeaveGroup(groupId, currentUserId);
-        setMsg("✅ You left the group.");
-        await load();
-      }
+      await svcLeaveGroup(groupId, currentUserId!);
+      setMsg("✅ You left the group.");
+      await load();
     } catch (e: any) {
       setError(e?.message ?? "Failed to leave group");
     }
@@ -321,14 +255,9 @@ export default function GroupMembersPageF180(props: {
     setMsg(null);
     setError(null);
     try {
-      if (isDemo) {
-        setMembers((v) => v.map((m) => (m.user_id === userId ? { ...m, role } : m)));
-        setMsg("✅ Demo: role updated.");
-      } else {
-        await svcSetMemberRole(groupId, userId, role);
-        setMsg("✅ Role updated.");
-        await load();
-      }
+      await svcSetMemberRole(groupId, userId, role);
+      setMsg("✅ Role updated.");
+      await load();
     } catch (e: any) {
       setError(e?.message ?? "Failed to set role");
     }
@@ -360,7 +289,7 @@ export default function GroupMembersPageF180(props: {
     <div className="mx-auto max-w-5xl px-4 py-6">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Members</h1>
+          <h1 className="text-xl font-semibold">Members <span className="text-xs opacity-60">(v3)</span></h1>
           <div className="text-sm text-[hsl(var(--muted-foreground))]">
             {groupName ? groupName : "Group"}
           </div>
@@ -382,16 +311,8 @@ export default function GroupMembersPageF180(props: {
               disabled={!canManage}
               title={canManage ? "" : "You don’t have permission to invite"}
             >
-              Invite by email
+              Invite by email (new)
             </button>
-            <label className="inline-flex items-center gap-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-              <input
-                type="checkbox"
-                checked={isDemo}
-                onChange={(e) => (e.target.checked ? enableDemo() : load())}
-              />
-              Demo mode
-            </label>
           </div>
         </div>
       </div>
@@ -496,7 +417,7 @@ export default function GroupMembersPageF180(props: {
                           title={!canManage ? "You don’t have permission" : ""}
                           onClick={async () => {
                             try {
-                              await resendInvite(i.id); // function call
+                              await resendInvite(i.id);
                               setMsg("✅ Invite resent.");
                             } catch (e: any) {
                               setError(e?.message ?? "Failed to resend invite");
@@ -560,8 +481,9 @@ export default function GroupMembersPageF180(props: {
                 className="h-9 rounded-lg bg-white/90 text-black px-3 text-sm disabled:opacity-50"
                 onClick={() => sendInvite(inviteEmail.trim())}
                 disabled={inviteSending || !inviteEmail.trim()}
+                title="F180 invite v3"
               >
-                {inviteSending ? "Sending…" : isDemo ? "Demo send" : "Send invite"}
+                {inviteSending ? "Sending…" : "Send invite"}
               </button>
             </div>
           </div>
