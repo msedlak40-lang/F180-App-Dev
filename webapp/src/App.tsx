@@ -19,6 +19,7 @@ import ApprovalsPage from "./pages/Admin/ApprovalsPageF180";
 import GroupMembersPage from "./pages/Group/GroupMembersPageF180";
 
 import AcceptStudyInvite from "./pages/AcceptStudyInvite";
+import AcceptInvitePageF180 from "./pages/AcceptInvitePageF180";
 
 // -------------- tiny hash router helper --------------
 function useHashRoute() {
@@ -82,25 +83,20 @@ export default function App() {
   const activeGid = gid || lastGid;
 
   // Header nav: ALWAYS show Home + the 5 tabs (order you requested).
-  // If no group known yet, tab links point to Home so nothing breaks.
-  const nav = React.useMemo(() => {
-    const home = { label: "Home", href: "#/" };
-    const base = activeGid ? `#/group/${activeGid}` : "#/";
-    return [
-      home,
-      { label: "Devotions", href: activeGid ? `${base}/devotions` : base },
-      { label: "Study",     href: activeGid ? `${base}/study`     : base },
-      { label: "Verses",    href: activeGid ? `${base}/verses`    : base },
-      { label: "Prayers",   href: activeGid ? `${base}/prayers`   : base },
-      { label: "Journal",   href: activeGid ? `${base}/journal`   : base },
-    ];
-  }, [activeGid]);
+  const nav = [
+    { label: "Home", href: "#/" },
+    activeGid && { label: "Verses", href: `#/group/${activeGid}/verses` },
+    activeGid && { label: "Devotion", href: `#/group/${activeGid}/devotions` },
+    activeGid && { label: "Study", href: `#/group/${activeGid}/study` },
+    activeGid && { label: "Journal", href: `#/group/${activeGid}/journal` },
+    activeGid && { label: "Prayers", href: `#/group/${activeGid}/prayers` },
+  ].filter(Boolean) as { label: string; href: string }[];
 
   if (!ready) {
     return (
-      <div className="f180 min-h-screen bg-[hsl(var(--secondary))]">
-        <div className="mx-auto max-w-6xl px-4 py-8 text-sm opacity-70">Loading…</div>
-      </div>
+      <ToastProvider>
+        <div className="px-4 py-6 text-sm opacity-70">Booting…</div>
+      </ToastProvider>
     );
   }
 
@@ -135,6 +131,13 @@ export default function App() {
           </div>
         )}
 
+        {/* Accept invite (client-only) */}
+        {segments[0] === "accept-invite" && (
+          <div className="mx-auto max-w-lg px-4 py-6">
+            <AcceptInvitePageF180 />
+          </div>
+        )}
+
         {/* Group members — accept both plain and -f180 */}
         {isGroup && (segments[2] === "members" || segments[2] === "members-f180") && (
           <div className="mx-auto max-w-6xl px-3 md:px-6 py-4">
@@ -158,13 +161,14 @@ export default function App() {
                 switch (tab) {
                   case "verses":
                     return <VersesTab groupId={gid} />;
+                  case "devotions":
+                    return <DevotionsTab groupId={gid} />;
                   case "study":
                     return <StudyTab groupId={gid} />;
                   case "journal":
                     return <JournalTab groupId={gid} />;
                   case "prayers":
-                    return <PrayersTab groupId={gid} />; // F180 version
-                  case "devotions":
+                    return <PrayersTab groupId={gid} />;
                   default:
                     return <DevotionsTab groupId={gid} />;
                 }
@@ -181,7 +185,8 @@ export default function App() {
             segments[0] === "admin" &&
             (segments[1] === "approvals" || segments[1] === "approvals-f180")
           ) &&
-          segments[0] !== "accept-study-invite" && (
+          segments[0] !== "accept-study-invite" &&
+          segments[0] !== "accept-invite" && (
             <>
               <h1 className="text-xl md:text-2xl font-semibold tracking-tight mb-3">Home</h1>
               <HomePage />
