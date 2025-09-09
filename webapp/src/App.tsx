@@ -13,7 +13,6 @@ import DevotionsTab from "./pages/Group/DevotionsTabF180";
 import StudyTab from "./pages/Group/StudyTabF180";
 import JournalTab from "./pages/Group/JournalTabF180";
 import PrayersTab from "./pages/Group/GroupPrayersTabF180";
-import Login from "./pages/Auth/Login";
 
 import RequestGroupPage from "./pages/Group/RequestGroupPageF180";
 import ApprovalsPage from "./pages/Admin/ApprovalsPageF180";
@@ -116,13 +115,6 @@ export default function App() {
             <h1 className="text-xl md:text-2xl font-semibold tracking-tight mb-3">Home</h1>
             <HomePage />
           </>
-        )}
-	{/* Login */}
-        {segments[0] === "login" && (
-         <div className="mx-auto max-w-md px-4 py-6">
-          <h1 className="text-xl md:text-2xl font-semibold tracking-tight mb-3">Sign in</h1>
-          <Login />
-         </div>
         )}
 
         {/* Accept study invite */}

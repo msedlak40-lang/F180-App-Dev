@@ -37,9 +37,20 @@ export default function RequestGroupPageF180() {
     notes: "",
   });
 
+  // NEW: requester contact email (required for notifications)
+  const [email, setEmail] = React.useState<string>("");
+
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
   const [err, setErr] = React.useState<string | null>(null);
+
+  // NEW: prefill email from current session if available
+  React.useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      const uEmail = data?.user?.email ?? "";
+      setEmail((prev) => prev || uEmail);
+    });
+  }, []);
 
   function onChange<K extends keyof FormState>(key: K, value: FormState[K]) {
     setState((s) => ({ ...s, [key]: value }));
@@ -47,6 +58,8 @@ export default function RequestGroupPageF180() {
 
   function validate(): string | null {
     if (!state.name.trim()) return "Please enter a group name.";
+    if (!email.trim()) return "Please enter a contact email.";
+    if (!email.includes("@")) return "Please enter a valid email.";
     if (!state.meeting_day) return "Please choose a meeting day.";
     if (!state.meeting_time) return "Please choose a meeting time.";
     if (!state.meeting_timezone) return "Please choose a time zone.";
@@ -69,44 +82,70 @@ export default function RequestGroupPageF180() {
       const { data: auth } = await supabase.auth.getUser();
       const user_id = auth.user?.id ?? null;
 
-      // Payload normalized to your groups-style column names
+      // Normalize your form state into a single payload object
       const payload = {
-        requester_id: user_id,          // optional, if your intake table stores requester
-        owner_id: user_id,              // optional alias
+        requester_id: user_id,
+        owner_id: user_id,
+        email: email.trim() || null,                     // <-- NEW
         name: state.name.trim(),
-        location: state.location.trim() || null,             // short label (e.g., "Members House")
-        metting_location: state.metting_location.trim() || null, // (sic) full address
+        location: state.location.trim() || null,         // short label
+        metting_location: state.metting_location.trim() || null, // full address (sic)
         meeting_day: state.meeting_day,
         meeting_time: state.meeting_time,
         meeting_timezone: state.meeting_timezone,
         notes: state.notes.trim() || null,
         created_at: new Date().toISOString(),
-        status: "pending",              // if intake table has a status column
+        status: "pending",
       };
 
-      // 1) Prefer an RPC if you have one
-      const rpcTry = await tryRpc([
-        ["request_group", { p_name: payload.name, p_location: payload.location, p_address: payload.metting_location, p_day: payload.meeting_day, p_time: payload.meeting_time, p_tz: payload.meeting_timezone, p_notes: payload.notes }],
-        // Add more RPC aliases here if needed
-      ]);
-      if (rpcTry.ok) {
+      // 1) RPC (jsonb) — matches: public.request_group(payload jsonb)
+      const { data: rpcId1, error: rpcErr1 } = await supabase.rpc("request_group", { payload });
+      if (!rpcErr1 && rpcId1) {
         setMsg("Request sent. An admin will review and approve.");
         resetForm();
         return;
       }
+      if (rpcErr1) console.error("RPC jsonb error:", rpcErr1);
 
-      // 2) Fallback to a common intake table name
-      const insertTry = await tryInsert([
-        ["group_requests", payload],
-        ["groups_pending", payload],
-      ]);
-      if (insertTry.ok) {
+      // 2) RPC (scalars) — optional overload if you have it
+      const { data: rpcId2, error: rpcErr2 } = await supabase.rpc("request_group", {
+        email: payload.email,
+        name: payload.name,
+        location: payload.location,
+        note: payload.notes,
+      });
+      if (!rpcErr2 && rpcId2) {
         setMsg("Request sent. An admin will review and approve.");
         resetForm();
         return;
       }
+      if (rpcErr2) console.error("RPC scalar error:", rpcErr2);
 
-      // If neither worked, surface a helpful error
+      // 3) Direct insert into group_requests (fallback)
+      const insertRow = {
+        created_by: user_id,
+        email: payload.email,                 // <-- NEW
+        name: payload.name,
+        location: payload.location,
+        note: payload.notes,                  // table column is singular "note"
+        payload,                              // store full JSON for admins
+        status: "pending",
+      };
+
+      const { data: ins, error: insErr } = await supabase
+        .from("group_requests")
+        .insert(insertRow)
+        .select("id")
+        .single();
+
+      if (!insErr && ins) {
+        setMsg("Request sent. An admin will review and approve.");
+        resetForm();
+        return;
+      }
+      if (insErr) console.error("Insert group_requests error:", insErr);
+
+      // If all 3 attempts failed, show a helpful message
       throw new Error(
         "Could not submit request. Please verify the intake RPC/table name (expected one of: rpc: request_group; table: group_requests or groups_pending)."
       );
@@ -127,35 +166,7 @@ export default function RequestGroupPageF180() {
       meeting_timezone: "America/Chicago",
       notes: "",
     });
-  }
-
-  // Helpers that try multiple backends gracefully
-  async function tryRpc(
-    candidates: ReadonlyArray<readonly [string, Record<string, any>]>
-  ) {
-    for (const [name, args] of candidates) {
-      try {
-        const { error } = await supabase.rpc(name, args as any);
-        if (!error) return { ok: true as const, name };
-      } catch {
-        // continue
-      }
-    }
-    return { ok: false as const };
-  }
-
-  async function tryInsert(
-    candidates: ReadonlyArray<readonly [string, Record<string, any>]>
-  ) {
-    for (const [table, row] of candidates) {
-      try {
-        const { error } = await supabase.from(table).insert(row);
-        if (!error) return { ok: true as const, table };
-      } catch {
-        // continue
-      }
-    }
-    return { ok: false as const };
+    setEmail("");
   }
 
   return (
@@ -169,12 +180,12 @@ export default function RequestGroupPageF180() {
           background-color: hsl(var(--popover));
           color: hsl(var(--popover-foreground));
           border: 1px solid hsl(var(--input));
-          color-scheme: dark; /* makes dropdown popups dark in modern browsers */
+          color-scheme: dark;
         }
         .f180 input[type="time"]::-webkit-calendar-picker-indicator,
         .f180 input[type="date"]::-webkit-calendar-picker-indicator,
         .f180 input[type="datetime-local"]::-webkit-calendar-picker-indicator {
-          filter: invert(1) opacity(0.92); /* white clock/calendar icon */
+          filter: invert(1) opacity(0.92);
         }
         .f180 select:focus,
         .f180 input[type="time"]:focus,
@@ -205,6 +216,22 @@ export default function RequestGroupPageF180() {
               placeholder="e.g., North Austin Fireside"
               required
             />
+          </div>
+
+          {/* NEW: Contact Email */}
+          <div className="space-y-1">
+            <label className="block text-xs text-white/70 mb-1">Contact Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="h-10 w-full rounded-lg border border-[hsl(var(--input))] bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-3 text-sm focus:outline-none"
+              placeholder="you@example.com"
+              required
+            />
+            <p className="text-xs text-white/50">
+              We’ll email you when your request is approved.
+            </p>
           </div>
 
           {/* Location label + Address */}

@@ -1,5 +1,6 @@
 import React from "react";
 import { supabase } from "../../lib/supabaseClient";
+import AuthBar from "../../components/AuthBarF180";
 
 type Group = { id: string; name?: string | null };
 
@@ -395,6 +396,10 @@ function queueVotdForVerses() {
   // ---------- UI ----------
   return (
     <div className="f180 space-y-6">
+<div className="space-y-4">
+  <AuthBar />
+  {/* existing “Your Fires” / groups UI below */}
+</div>
       {/* Header / group picker */}
       <div className="rounded-[var(--radius)] border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 md:p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

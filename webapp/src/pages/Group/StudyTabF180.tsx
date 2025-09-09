@@ -34,7 +34,7 @@ import {
   type StudyInvite,
 } from "../../services/study.f180";
 import GenerateStudyModalF180 from "./GenerateStudyModalF180";
-import "../../styles/f180.css";
+//import "../../styles/f180.css";
 
 type Props = { groupId: string };
 type TabKey = "study" | "highlights" | "bookmarks" | "archived";
