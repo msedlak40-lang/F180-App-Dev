@@ -1,9 +1,6 @@
 import React from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
-  inviteMember as svcInviteMember,
-  resendInvite as svcResendInvite,
-  cancelInvite as svcCancelInvite,
   removeMember as svcRemoveMember,
   leaveGroup as svcLeaveGroup,
   setMemberRole as svcSetMemberRole,
@@ -35,10 +32,6 @@ type InviteRow = {
   status: "pending" | "accepted" | "revoked" | "expired" | null;
   created_at: string;
 };
-
-function Bool<T>(x: T | null | undefined): x is T {
-  return !!x;
-}
 
 function Pill({ children }: { children: React.ReactNode }) {
   return (
@@ -89,7 +82,6 @@ export default function GroupMembersPageF180(props: {
   }, []);
 
   React.useEffect(() => {
-    // Enable demo via /#/group/{id}/members-f180?demo=1
     try {
       const hash =
         typeof window !== "undefined" && window.location && typeof window.location.hash === "string"
@@ -101,9 +93,7 @@ export default function GroupMembersPageF180(props: {
         enableDemo();
         return;
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId, currentUserId]);
@@ -115,12 +105,12 @@ export default function GroupMembersPageF180(props: {
     try {
       // 1) Group name if not provided
       if (!groupNameProp) {
-        const { data: gData, error: gErr } = await supabase
+        const { data: gData } = await supabase
           .from("groups")
           .select("name")
           .eq("id", groupId)
           .single();
-        if (!gErr) setGroupName(gData?.name ?? null);
+        setGroupName(gData?.name ?? null);
       } else {
         setGroupName(groupNameProp);
       }
@@ -133,7 +123,7 @@ export default function GroupMembersPageF180(props: {
       if (mErr) throw mErr;
       const ms: MemberRow[] = (mData ?? []) as any;
 
-      // 3) Profiles for those member ids
+      // 3) Profiles
       const memberIds = ms.map((m) => m.user_id).filter(Boolean);
       let profilesById: Record<string, Profile> = {};
       if (memberIds.length) {
@@ -142,11 +132,8 @@ export default function GroupMembersPageF180(props: {
           .select("id, display_name, full_name, first_name, last_name, email")
           .in("id", memberIds);
         if (pErr) throw pErr;
-        (pData ?? []).forEach((p: any) => {
-          profilesById[p.id] = p;
-        });
+        (pData ?? []).forEach((p: any) => (profilesById[p.id] = p));
       }
-
       const mergedMembers: MemberRow[] = ms.map((m) => ({
         ...m,
         profile: profilesById[m.user_id] ?? null,
@@ -199,34 +186,13 @@ export default function GroupMembersPageF180(props: {
         user_id: "u_me",
         role: "leader" as Role,
         created_at: new Date().toISOString(),
-        profile: {
-          id: "u_me",
-          display_name: "You (Leader)",
-          email: "you@example.com",
-        },
+        profile: { id: "u_me", display_name: "You (Leader)", email: "you@example.com" },
       },
-      {
-        user_id: "u_1",
-        role: "member" as Role,
-        created_at: new Date(Date.now() - 3600_000).toISOString(),
-        profile: { id: "u_1", display_name: "Mark S.", email: "mark@demo.com" },
-      },
-      {
-        user_id: "u_2",
-        role: "member" as Role,
-        created_at: new Date(Date.now() - 7200_000).toISOString(),
-        profile: { id: "u_2", display_name: "Jake T.", email: "jake@demo.com" },
-      },
+      { user_id: "u_1", role: "member" as Role, created_at: new Date(Date.now() - 3600_000).toISOString(), profile: { id: "u_1", display_name: "Mark S.", email: "mark@demo.com" } },
+      { user_id: "u_2", role: "member" as Role, created_at: new Date(Date.now() - 7200_000).toISOString(), profile: { id: "u_2", display_name: "Jake T.", email: "jake@demo.com" } },
     ];
     const demoInvites: InviteRow[] = [
-      {
-        id: "i_1",
-        group_id: groupId,
-        email: "invitee@demo.com",
-        invited_by: "u_me",
-        status: "pending",
-        created_at: new Date().toISOString(),
-      },
+      { id: "i_1", group_id: groupId, email: "invitee@demo.com", invited_by: "u_me", status: "pending", created_at: new Date().toISOString() },
     ];
     setMembers(demoMembers);
     setInvites(demoInvites);
@@ -234,7 +200,7 @@ export default function GroupMembersPageF180(props: {
     setLoading(false);
   }
 
-  // ---------- Helpers: email function invoke ----------
+  // ---------- Edge function helpers ----------
 
   async function sendInviteEmail(group_id: string, email: string) {
     const { data, error } = await supabase.functions.invoke("send-invite-email", {
@@ -252,7 +218,7 @@ export default function GroupMembersPageF180(props: {
     return data;
   }
 
-  // ---------- Actions (using services + email function) ----------
+  // ---------- Actions ----------
 
   async function sendInvite(email: string) {
     setInviteSending(true);
@@ -267,12 +233,8 @@ export default function GroupMembersPageF180(props: {
         ]);
         setMsg("✅ Demo: invite queued (not saved).");
       } else {
-        // 1) Create/ensure the invite exists in DB (your existing service)
-        await svcInviteMember(groupId, email);
-
-        // 2) Send the email via Edge Function (handles token + link)
+        // Create/refresh invite row + send email in the function
         await sendInviteEmail(groupId, email);
-
         setMsg("✅ Invite sent.");
         await load();
       }
@@ -293,12 +255,7 @@ export default function GroupMembersPageF180(props: {
         await new Promise((r) => setTimeout(r, 300));
         setMsg("✅ Demo: resend queued.");
       } else {
-        // (optional) keep your DB 'resend' bookkeeping
-        await svcResendInvite(inviteId);
-
-        // Send email again via Edge Function
         await resendInviteEmail(inviteId);
-
         setMsg("✅ Invite resent.");
       }
     } catch (e: any) {
@@ -314,7 +271,11 @@ export default function GroupMembersPageF180(props: {
         setInvites((v) => v.filter((i) => i.id !== inviteId));
         setMsg("✅ Demo: invite canceled.");
       } else {
-        await svcCancelInvite(inviteId);
+        const { error } = await supabase
+          .from("group_invitations")
+          .update({ status: "revoked" })
+          .eq("id", inviteId);
+        if (error) throw error;
         setMsg("✅ Invite canceled.");
         await load();
       }
@@ -361,9 +322,7 @@ export default function GroupMembersPageF180(props: {
     setError(null);
     try {
       if (isDemo) {
-        setMembers((v) =>
-          v.map((m) => (m.user_id === userId ? { ...m, role } : m))
-        );
+        setMembers((v) => v.map((m) => (m.user_id === userId ? { ...m, role } : m)));
         setMsg("✅ Demo: role updated.");
       } else {
         await svcSetMemberRole(groupId, userId, role);
@@ -537,8 +496,7 @@ export default function GroupMembersPageF180(props: {
                           title={!canManage ? "You don’t have permission" : ""}
                           onClick={async () => {
                             try {
-                              await svcResendInvite(i.id); // optional bookkeeping
-                              await resendInviteEmail(i.id); // actual email
+                              await resendInvite(i.id); // function call
                               setMsg("✅ Invite resent.");
                             } catch (e: any) {
                               setError(e?.message ?? "Failed to resend invite");
